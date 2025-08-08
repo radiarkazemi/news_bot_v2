@@ -1,319 +1,414 @@
 """
-Complete news handler for processing and managing news with admin approval workflow.
+Complete news handler with financial focus and approval workflow.
+Handles news detection, filtering, approval, and publishing.
 """
-import logging
 import asyncio
-import json
-import time
-import re
 import hashlib
+import json
+import logging
+import os
+import time
 from datetime import datetime, timedelta
+from pathlib import Path
+
 from telethon import events
+from telethon.errors import FloodWaitError
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
-from telethon.errors import FloodWaitError, UserNotParticipantError
+
+# Import services
+from src.services.news_detector import NewsDetector
+from src.services.news_filter import NewsFilter
+from src.client.bot_api import BotAPIClient
+from src.utils.time_utils import get_current_time, get_formatted_time
+from config.settings import (
+    TARGET_CHANNEL_ID, ADMIN_BOT_USERNAME, NEW_ATTRIBUTION,
+    NEWS_CHANNEL, TWITTER_NEWS_CHANNEL, CHANNEL_PROCESSING_DELAY
+)
 
 logger = logging.getLogger(__name__)
 
-try:
-    from src.client.bot_api import BotAPIClient
-    from src.services.news_detector import NewsDetector
-    from src.services.news_filter import NewsFilter
-    from src.services.state_manager import StateManager
-    from config.settings import (
-        TARGET_CHANNEL_ID, ADMIN_BOT_USERNAME, NEW_ATTRIBUTION,
-        ADMIN_APPROVAL_TIMEOUT, ENABLE_MEDIA_PROCESSING, CHANNEL_PROCESSING_DELAY
-    )
-except ImportError as e:
-    logger.error(f"Import error in news_handler: {e}")
-    # Fallback values
-    TARGET_CHANNEL_ID = -1002481901026
-    ADMIN_BOT_USERNAME = "goldnewsadminbot" 
-    NEW_ATTRIBUTION = "@anilgoldgallerynews"
-    ADMIN_APPROVAL_TIMEOUT = 3600
-    ENABLE_MEDIA_PROCESSING = True
-    CHANNEL_PROCESSING_DELAY = 2
-
-
 class NewsHandler:
-    """Complete news handler with full detection, filtering, and approval workflow."""
+    """Complete news handler for financial news detection and approval workflow."""
 
     def __init__(self, client_manager):
         """Initialize the news handler."""
         self.client_manager = client_manager
-        
-        # Initialize services with fallback
-        try:
-            self.bot_api = BotAPIClient()
-            self.news_detector = NewsDetector()
-            self.state_manager = StateManager()
-        except Exception as e:
-            logger.error(f"Error initializing services: {e}")
-            # Create minimal fallbacks
-            self.bot_api = None
-            self.news_detector = None
-            self.state_manager = None
-        
+        self.bot_api = None
+        self.news_detector = NewsDetector()
         self.pending_news = {}
-        
-        # Track processed messages to avoid duplicates
         self.processed_messages = set()
+        self.admin_bot_entity = None
         
-        # Cache for channel entities to avoid repeated lookups
-        self.channel_cache = {}
-        
-        # Statistics tracking
+        # Statistics
         self.stats = {
             'messages_processed': 0,
             'news_detected': 0,
+            'news_filtered_out': 0,
             'news_sent_for_approval': 0,
             'news_approved': 0,
-            'news_filtered_out': 0,
+            'news_published': 0,
             'errors': 0,
             'session_start': time.time()
         }
+        
+        # State file path
+        self.state_file = Path("data/state/news_handler_state.json")
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        logger.info("📰 News handler initialized with financial focus")
+
+    async def initialize(self):
+        """Initialize the news handler with Bot API."""
+        try:
+            self.bot_api = BotAPIClient()
+            logger.info("✅ News handler initialized with Bot API")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Bot API: {e}")
 
     async def setup_approval_handler(self):
-        """Set up the approval command handler for admin bot."""
+        """Set up the approval command handler."""
         try:
-            if not self.client_manager.client:
-                logger.error("Client not available for setting up approval handler")
-                return False
-
-            @self.client_manager.client.on(events.NewMessage(pattern=r'/submit(\d+)'))
-            async def approval_handler(event):
-                """Handle approval commands from admin."""
+            client = self.client_manager.client
+            
+            @client.on(events.NewMessage(pattern=r'/submit(\w+)'))
+            async def handle_approval_command(event):
+                """Handle approval commands from admin bot."""
                 try:
+                    # Extract approval ID
                     approval_id = event.pattern_match.group(1)
-                    logger.info(f"📝 Received approval command for ID: {approval_id}")
-                    await self.handle_approval_command(approval_id, event)
+                    logger.info(f"📥 Received approval command for: {approval_id}")
+                    
+                    # Check if we have this pending news
+                    if approval_id not in self.pending_news:
+                        await event.reply(f"❌ News item {approval_id} not found or already processed")
+                        logger.warning(f"Approval ID {approval_id} not found in pending news")
+                        return
+                    
+                    # Get news data
+                    news_data = self.pending_news[approval_id]
+                    logger.info(f"📋 Processing approval for news: {news_data['text'][:100]}...")
+                    
+                    # Publish the news
+                    success = await self.publish_approved_news(news_data)
+                    
+                    if success:
+                        # Success response
+                        await event.reply(f"✅ News {approval_id} published successfully to channel!")
+                        logger.info(f"✅ Successfully published approved news: {approval_id}")
+                        
+                        # Update statistics
+                        self.stats['news_approved'] += 1
+                        self.stats['news_published'] += 1
+                        
+                        # Remove from pending
+                        del self.pending_news[approval_id]
+                        await self.save_pending_news()
+                        
+                    else:
+                        # Failure response
+                        await event.reply(f"❌ Failed to publish news {approval_id}. Please try again or contact support.")
+                        logger.error(f"❌ Failed to publish approved news: {approval_id}")
+                        
                 except Exception as e:
-                    logger.error(f"Error in approval handler: {e}")
+                    logger.error(f"❌ Error handling approval command for {approval_id}: {e}")
                     try:
-                        await event.reply("❌ Error processing approval command.")
+                        await event.reply("❌ Error processing approval. Please contact support.")
                     except:
                         pass
-
+            
+            # Also handle rejection commands (optional)
+            @client.on(events.NewMessage(pattern=r'/reject(\w+)'))
+            async def handle_rejection_command(event):
+                """Handle rejection commands from admin bot."""
+                try:
+                    approval_id = event.pattern_match.group(1)
+                    logger.info(f"🚫 Received rejection command for: {approval_id}")
+                    
+                    if approval_id in self.pending_news:
+                        # Remove from pending
+                        news_data = self.pending_news[approval_id]
+                        del self.pending_news[approval_id]
+                        await self.save_pending_news()
+                        
+                        await event.reply(f"🚫 News {approval_id} rejected and removed from queue")
+                        logger.info(f"🚫 News {approval_id} rejected and removed")
+                    else:
+                        await event.reply(f"❌ News item {approval_id} not found")
+                        
+                except Exception as e:
+                    logger.error(f"Error handling rejection command: {e}")
+                    try:
+                        await event.reply("❌ Error processing rejection")
+                    except:
+                        pass
+            
             logger.info("✅ News approval handler set up successfully")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to set up approval handler: {e}")
+            logger.error(f"❌ Failed to set up approval handler: {e}")
             return False
-
-    async def handle_approval_command(self, approval_id, event):
-        """Handle news approval command from admin."""
-        try:
-            if approval_id not in self.pending_news:
-                await event.reply(f"❌ News item {approval_id} not found or already processed.")
-                logger.warning(f"Approval ID {approval_id} not found in pending news")
-                return
-
-            news_data = self.pending_news[approval_id]
-            
-            # Publish the approved news
-            logger.info(f"📤 Publishing approved news: {approval_id}")
-            success = await self.publish_approved_news(news_data)
-            
-            if success:
-                await event.reply(f"✅ News {approval_id} approved and published!")
-                # Remove from pending
-                del self.pending_news[approval_id]
-                await self.save_pending_news()
-                
-                # Update statistics
-                self.stats['news_approved'] += 1
-                logger.info(f"✅ Successfully published approved news {approval_id}")
-            else:
-                await event.reply(f"❌ Failed to publish news {approval_id}. Please try again.")
-                logger.error(f"Failed to publish approved news {approval_id}")
-                
-        except Exception as e:
-            logger.error(f"Error handling approval command for {approval_id}: {e}")
-            try:
-                await event.reply("❌ Error processing approval. Please contact support.")
-            except:
-                pass
 
     async def publish_approved_news(self, news_data):
         """Publish approved news to the target channel."""
         try:
             if not self.bot_api:
-                logger.error("Bot API not available")
+                logger.error("❌ Bot API not available for publishing")
                 return False
-                
+            
+            # Get formatted text
             formatted_text = news_data.get('formatted_text', news_data['text'])
             
-            # Use Bot API to send message
-            result = self.bot_api.send_message(
-                chat_id=TARGET_CHANNEL_ID,
-                text=formatted_text,
-                parse_mode='HTML'
-            )
+            # Ensure proper formatting
+            if not formatted_text.startswith(('💰', '💱', '🏆', '₿', '🛢️', '📈')):
+                # Add appropriate financial emoji
+                if any(kw in formatted_text.lower() for kw in ['طلا', 'سکه', 'gold']):
+                    formatted_text = f"🏆 {formatted_text}"
+                elif any(kw in formatted_text.lower() for kw in ['دلار', 'یورو', 'ارز', 'dollar', 'euro']):
+                    formatted_text = f"💱 {formatted_text}"
+                else:
+                    formatted_text = f"📈 {formatted_text}"
+            
+            # Add attribution if not present
+            if NEW_ATTRIBUTION and NEW_ATTRIBUTION not in formatted_text:
+                formatted_text = f"{formatted_text}\n\n📡 {NEW_ATTRIBUTION}"
+            
+            # Add timestamp if not present
+            if "🕐" not in formatted_text:
+                current_time = get_formatted_time()
+                formatted_text = f"{formatted_text}\n🕐 {current_time}"
+            
+            # Publish to target channel - FIX: Properly await the async method
+            logger.info(f"📤 Attempting to publish to channel {TARGET_CHANNEL_ID}")
+            
+            # Create async context and properly await the send_message
+            async with self.bot_api as api_client:
+                result = await api_client.send_message(
+                    chat_id=TARGET_CHANNEL_ID,
+                    text=formatted_text,
+                    parse_mode='HTML'
+                )
             
             if result:
-                logger.info(f"📢 News published to channel {TARGET_CHANNEL_ID}")
+                logger.info(f"📢 Financial news published to channel {TARGET_CHANNEL_ID}")
+                logger.info(f"🆔 Published message ID: {result.get('message_id', 'Unknown')}")
                 return True
             else:
-                logger.error("Failed to publish news via Bot API")
+                logger.error("❌ Failed to publish news via Bot API")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error publishing approved news: {e}")
+            logger.error(f"❌ Error publishing approved news: {e}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
 
     async def process_news_messages(self, channel_username):
-        """Process recent news messages from a channel with full detection."""
-        logger.info(f"🔍 Processing news messages from channel: {channel_username}")
+        """Process news messages from a channel with financial focus."""
+        logger.info(f"🔍 Processing financial news from channel: {channel_username}")
         
         try:
-            # Get recent messages from the channel
-            messages = await self.get_recent_news_messages(channel_username)
+            # Get channel entity
+            if not channel_username.startswith('@'):
+                channel_username = '@' + channel_username
             
-            if not messages:
-                logger.debug(f"No new messages found in {channel_username}")
-                return False
-
-            success_count = 0
-            total_processed = 0
+            channel_entity = await self.client_manager.client.get_entity(channel_username)
             
-            for msg_id, text, timestamp, media in messages:
+            # Get recent messages (last 3 hours)
+            cutoff_time = datetime.now() - timedelta(hours=3)
+            
+            messages_processed = 0
+            news_sent_for_approval = 0
+            total_messages = 0
+            
+            logger.info(f"📥 Retrieving recent messages from {channel_username}")
+            
+            async for message in self.client_manager.client.iter_messages(channel_entity, limit=30):
                 try:
-                    total_processed += 1
+                    total_messages += 1
+                    
+                    # Skip if too old
+                    if message.date.replace(tzinfo=None) < cutoff_time:
+                        continue
+                    
+                    # Skip if no text
+                    if not message.text or len(message.text.strip()) < 30:
+                        continue
+                    
+                    # Check if already processed
+                    message_key = f"{channel_username.replace('@', '')}:{message.id}"
+                    if message_key in self.processed_messages:
+                        continue
+                    
+                    messages_processed += 1
                     self.stats['messages_processed'] += 1
                     
-                    # Create unique message key to avoid duplicates
-                    message_key = f"{channel_username}:{msg_id}"
-                    if message_key in self.processed_messages:
-                        logger.debug(f"Skipping already processed message: {msg_id}")
+                    logger.debug(f"📝 Analyzing message {message.id}: {message.text[:100]}...")
+                    
+                    # Step 1: Financial news detection
+                    if not self.news_detector.is_news(message.text):
+                        logger.debug(f"Message {message.id} not detected as financial news")
                         continue
                     
-                    # Step 1: Detect if it's news content
-                    if not self.news_detector or not self.news_detector.is_news(text):
-                        logger.debug(f"Message {msg_id} not detected as news")
-                        continue
-                    
+                    logger.info(f"📰 Financial news detected in message {message.id}")
                     self.stats['news_detected'] += 1
-                    logger.info(f"📰 News detected in message {msg_id}")
                     
-                    # Step 2: Check if it contains multiple news items
-                    news_segments = self.news_detector.split_combined_news(text) if self.news_detector else [text]
+                    # Step 2: Apply financial relevance filter
+                    try:
+                        is_relevant, score, topics = NewsFilter.is_relevant_news(message.text)
+                    except Exception as filter_error:
+                        logger.warning(f"NewsFilter error: {filter_error}, assuming relevant")
+                        is_relevant, score, topics = True, 5, ["fallback"]
+                    
+                    if not is_relevant:
+                        logger.info(f"Message {message.id} filtered out (financial score: {score})")
+                        self.stats['news_filtered_out'] += 1
+                        continue
+                    
+                    category = NewsFilter.get_financial_category(message.text, topics)
+                    priority = NewsFilter.get_priority_level(score)
+                    
+                    logger.info(f"✅ Relevant financial news found: score={score}, "
+                               f"category={category}, priority={priority}, topics={topics[:3]}")
+                    
+                    # Step 3: Handle multiple news segments if present
+                    news_segments = self.news_detector.split_combined_news(message.text)
                     
                     if len(news_segments) > 1:
-                        logger.info(f"📋 Split into {len(news_segments)} news segments")
+                        logger.info(f"📋 Split into {len(news_segments)} financial news segments")
                     
-                    # Step 3: Process each segment
+                    # Process each segment
                     for i, segment in enumerate(news_segments):
-                        if len(segment.strip()) < 50:  # Skip very short segments
+                        if len(segment.strip()) < 50:
                             continue
                         
-                        # Check relevance using our war/geopolitical filter
+                        # Re-check relevance for each segment
                         try:
-                            from src.services.news_filter import NewsFilter
-                            is_relevant, score, topics = NewsFilter.is_relevant_news(segment)
+                            seg_relevant, seg_score, seg_topics = NewsFilter.is_relevant_news(segment)
                         except:
-                            # Fallback simple check
-                            is_relevant, score, topics = True, 1, ["fallback"]
+                            seg_relevant, seg_score, seg_topics = True, 3, ["segment"]
                         
-                        if not is_relevant:
-                            logger.debug(f"Segment {i+1} filtered out (score: {score})")
-                            self.stats['news_filtered_out'] += 1
+                        if not seg_relevant:
+                            logger.debug(f"Segment {i+1} filtered out (score: {seg_score})")
                             continue
                         
-                        # Process the relevant news segment
-                        success = await self.process_single_news_item(
-                            segment, 
-                            media if i == 0 else None,  # Only attach media to first segment
-                            channel_username,
-                            msg_id
+                        # Clean and format the segment
+                        cleaned_text = self.news_detector.clean_news_text(segment)
+                        
+                        # Handle media (only for first segment)
+                        media = None
+                        if i == 0 and message.media:
+                            media = self._extract_media_info(message, channel_username)
+                        
+                        # Send for approval
+                        approval_id = await self.send_to_approval_bot(
+                            cleaned_text, 
+                            media, 
+                            channel_username.replace('@', ''),
+                            {
+                                'score': seg_score,
+                                'category': category,
+                                'priority': priority,
+                                'topics': seg_topics[:5]
+                            }
                         )
                         
-                        if success:
-                            success_count += 1
+                        if approval_id:
+                            news_sent_for_approval += 1
+                            self.stats['news_sent_for_approval'] += 1
                             self.processed_messages.add(message_key)
-                            logger.info(f"✅ Processed segment {i+1} with score {score}, topics: {topics[:3]}")
+                            logger.info(f"📤 Segment {i+1} sent for approval: {approval_id}")
                         
-                        # Small delay between segments
+                        # Delay between segments
                         await asyncio.sleep(1)
-                
+                    
+                    # Mark message as processed
+                    self.processed_messages.add(message_key)
+                    
+                    # Delay between messages
+                    await asyncio.sleep(CHANNEL_PROCESSING_DELAY)
+                    
                 except Exception as e:
-                    logger.error(f"Error processing message {msg_id}: {e}")
+                    logger.error(f"Error processing message {message.id}: {e}")
                     self.stats['errors'] += 1
                     continue
-                
-                # Delay between messages to avoid rate limits
-                await asyncio.sleep(CHANNEL_PROCESSING_DELAY)
             
-            logger.info(f"📊 Channel processing complete: {success_count}/{total_processed} messages processed from {channel_username}")
-            return success_count > 0
+            logger.info(f"📊 Channel processing complete: {news_sent_for_approval}/{messages_processed} "
+                       f"relevant items sent for approval from {total_messages} total messages")
+            
+            return news_sent_for_approval > 0
             
         except Exception as e:
-            logger.error(f"Error processing news from {channel_username}: {e}")
+            logger.error(f"❌ Error processing financial news from {channel_username}: {e}")
             self.stats['errors'] += 1
             return False
 
-    async def process_single_news_item(self, text, media, source_channel, msg_id):
-        """Process a single news item through the complete pipeline."""
+    def _extract_media_info(self, message, channel_username):
+        """Extract media information from message."""
         try:
-            # Clean and format the news text
-            if self.news_detector:
-                cleaned_text = self.news_detector.clean_news_text(text)
-            else:
-                cleaned_text = text  # Fallback
-            
-            if not cleaned_text:
-                logger.debug("News text cleaning resulted in empty content")
-                return False
-            
-            # Extract metadata for better processing
-            if self.news_detector:
-                metadata = self.news_detector.extract_news_metadata(text)
-                logger.debug(f"News metadata: {metadata}")
-            
-            # Send to approval bot
-            approval_id = await self.send_to_approval_bot(cleaned_text, media, source_channel)
-            
-            if approval_id:
-                self.stats['news_sent_for_approval'] += 1
-                logger.info(f"📤 Sent news for approval: {approval_id} (from {source_channel})")
-                return True
-            else:
-                logger.error("Failed to send news to approval bot")
-                return False
-                
+            if isinstance(message.media, MessageMediaPhoto):
+                return {
+                    "type": "photo",
+                    "media_id": message.media.photo.id,
+                    "message_id": message.id,
+                    "channel": channel_username
+                }
+            elif isinstance(message.media, MessageMediaDocument):
+                document = message.media.document
+                # Check if it's an image document
+                if any(hasattr(attr, 'mime_type') and attr.mime_type.startswith('image/') 
+                       for attr in document.attributes):
+                    return {
+                        "type": "document",
+                        "media_id": document.id,
+                        "message_id": message.id,
+                        "channel": channel_username
+                    }
         except Exception as e:
-            logger.error(f"Error processing single news item: {e}")
-            return False
+            logger.warning(f"Error extracting media info: {e}")
+        
+        return None
 
-    async def send_to_approval_bot(self, news_text, media=None, source_channel=None):
-        """Send news to admin bot for approval with enhanced formatting."""
+    async def send_to_approval_bot(self, news_text, media=None, source_channel=None, analysis=None):
+        """Send financial news to admin bot for approval."""
         try:
             # Generate unique approval ID
-            content_hash = hashlib.md5(news_text.encode()).hexdigest()[:4]
+            content_hash = hashlib.md5(news_text.encode()).hexdigest()[:6]
             timestamp_id = str(int(time.time() * 1000))[-6:]
             approval_id = f"{timestamp_id}{content_hash}"
             
             # Get admin bot entity
             admin_bot_entity = await self.get_admin_bot_entity()
             if not admin_bot_entity:
-                logger.error("Could not get admin bot entity")
+                logger.error("❌ Could not get admin bot entity")
                 return None
             
-            # Format message for approval
-            try:
-                from src.utils.time_utils import get_formatted_time
-                current_time = get_formatted_time()
-            except:
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Format analysis info
+            analysis_info = ""
+            if analysis:
+                category = analysis.get('category', 'UNKNOWN')
+                priority = analysis.get('priority', 'NORMAL')
+                score = analysis.get('score', 0)
+                topics = analysis.get('topics', [])
+                
+                analysis_info = (f"💼 Category: {category}\n"
+                               f"⚡ Priority: {priority}\n" 
+                               f"📊 Score: {score}\n"
+                               f"🏷️ Topics: {', '.join(topics[:3])}\n")
             
+            # Format approval message
+            current_time = get_formatted_time()
             approval_message = (
-                f"📰 <b>NEWS ITEM PENDING APPROVAL</b>\n"
+                f"📈 <b>FINANCIAL NEWS PENDING APPROVAL</b>\n\n"
                 f"🆔 ID: <code>{approval_id}</code>\n"
-                f"📡 Source: {source_channel or 'Unknown'}\n"  
+                f"📡 Source: {source_channel or 'Unknown'}\n"
                 f"🕐 Time: {current_time}\n"
+                f"{analysis_info}"
                 f"{'📎 Has Media' if media else '📝 Text Only'}\n\n"
                 f"<b>Content:</b>\n"
                 f"{news_text}\n\n"
-                f"➡️ <b>To approve, send:</b> <code>/submit{approval_id}</code>"
+                f"➡️ <b>To approve:</b> <code>/submit{approval_id}</code>\n"
+                f"➡️ <b>To reject:</b> <code>/reject{approval_id}</code>"
             )
             
             # Send to admin bot
@@ -324,7 +419,7 @@ class NewsHandler:
             )
             
             if message:
-                # Store pending news with comprehensive data
+                # Store pending news
                 self.pending_news[approval_id] = {
                     'text': news_text,
                     'formatted_text': news_text,
@@ -334,6 +429,7 @@ class NewsHandler:
                     'source_channel': source_channel,
                     'has_media': media is not None,
                     'media': media,
+                    'analysis': analysis,
                     'approval_source': 'telegram',
                     'status': 'pending'
                 }
@@ -341,204 +437,120 @@ class NewsHandler:
                 # Save state
                 await self.save_pending_news()
                 
-                logger.info(f"📤 Sent news for approval: {approval_id}")
+                logger.info(f"📤 Financial news sent for approval: {approval_id}")
                 return approval_id
             else:
-                logger.error("Failed to send message to admin bot")
+                logger.error("❌ Failed to send message to admin bot")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error sending to approval bot: {e}")
+            logger.error(f"❌ Error sending to approval bot: {e}")
             return None
 
     async def get_admin_bot_entity(self):
         """Get the admin bot entity with caching."""
+        if self.admin_bot_entity:
+            return self.admin_bot_entity
+        
         try:
-            if 'admin_bot' not in self.channel_cache:
-                self.channel_cache['admin_bot'] = await self.client_manager.client.get_entity(
-                    ADMIN_BOT_USERNAME
-                )
-            return self.channel_cache['admin_bot']
-        except Exception as e:
-            logger.error(f"Error getting admin bot entity: {e}")
-            return None
-
-    async def get_recent_news_messages(self, channel_username, limit=20):
-        """Get recent messages from a news channel with enhanced filtering."""
-        try:
-            # Normalize channel username
-            if not channel_username.startswith('@'):
-                channel_username = '@' + channel_username
+            # Try different username formats
+            possible_usernames = [
+                ADMIN_BOT_USERNAME,
+                f"@{ADMIN_BOT_USERNAME}",
+                ADMIN_BOT_USERNAME.replace('@', '')
+            ]
             
-            # Get channel entity with caching
-            if channel_username not in self.channel_cache:
+            for username in possible_usernames:
                 try:
-                    self.channel_cache[channel_username] = await self.client_manager.client.get_entity(channel_username)
-                except UserNotParticipantError:
-                    logger.error(f"Bot is not a member of channel {channel_username}")
-                    return []
-                except Exception as e:
-                    logger.error(f"Error getting channel entity for {channel_username}: {e}")
-                    return []
-            
-            channel = self.channel_cache[channel_username]
-            messages = []
-            
-            # Get state to track last processed message
-            state_key = f"last_message_{channel_username.replace('@', '')}"
-            if self.state_manager:
-                current_state = self.state_manager.load_state()
-                last_processed_id = current_state.get(state_key, 0)
-            else:
-                last_processed_id = 0
-            
-            new_last_processed_id = last_processed_id
-            
-            # Get recent messages
-            async for message in self.client_manager.client.iter_messages(channel, limit=limit):
-                if not message.text:
+                    entity = await self.client_manager.client.get_entity(username)
+                    self.admin_bot_entity = entity
+                    logger.info(f"✅ Found admin bot: {username}")
+                    return entity
+                except:
                     continue
-                
-                # Skip if we've already processed this message
-                if message.id <= last_processed_id:
-                    break
-                
-                # Update the newest message ID we've seen
-                if message.id > new_last_processed_id:
-                    new_last_processed_id = message.id
-                
-                # Prepare media info if present
-                media_info = None
-                if ENABLE_MEDIA_PROCESSING and message.media:
-                    if isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument)):
-                        media_info = {
-                            'type': type(message.media).__name__,
-                            'media_id': message.id,
-                            'file_id': getattr(message.media.photo, 'id', None) if hasattr(message.media, 'photo') else None
-                        }
-                
-                messages.append((
-                    message.id,
-                    message.text,
-                    message.date,
-                    media_info
-                ))
             
-            # Update last processed message ID in state
-            if self.state_manager and new_last_processed_id > last_processed_id:
-                current_state = self.state_manager.load_state()
-                current_state[state_key] = new_last_processed_id
-                self.state_manager.save_state(current_state)
-                logger.debug(f"Updated last processed message ID for {channel_username}: {new_last_processed_id}")
-            
-            logger.info(f"📥 Retrieved {len(messages)} new messages from {channel_username}")
-            return messages
+            logger.error(f"❌ Could not find admin bot with username: {ADMIN_BOT_USERNAME}")
+            return None
             
         except Exception as e:
-            logger.error(f"Error getting messages from {channel_username}: {e}")
-            return []
-
-    async def check_approval_timeouts(self):
-        """Check and handle approval timeouts with enhanced logging."""
-        current_time = time.time()
-        expired_items = []
-        
-        for approval_id, news_data in self.pending_news.items():
-            age = current_time - news_data['timestamp']
-            if age > ADMIN_APPROVAL_TIMEOUT:
-                expired_items.append((approval_id, age))
-        
-        if expired_items:
-            logger.info(f"⏰ Found {len(expired_items)} expired approval items")
-            
-            for approval_id, age in expired_items:
-                hours = int(age // 3600)
-                minutes = int((age % 3600) // 60)
-                logger.info(f"⏰ Expired approval {approval_id} (age: {hours}h {minutes}m)")
-                
-                # Optionally notify admin about timeout
-                try:
-                    admin_bot = await self.get_admin_bot_entity()
-                    if admin_bot:
-                        timeout_msg = f"⏰ News approval {approval_id} has timed out ({hours}h {minutes}m old)"
-                        await self.client_manager.client.send_message(admin_bot, timeout_msg)
-                except Exception as e:
-                    logger.error(f"Error sending timeout notification: {e}")
-                
-                del self.pending_news[approval_id]
-            
-            await self.save_pending_news()
-
-    async def save_pending_news(self):
-        """Save pending news to state with error handling."""
-        try:
-            if self.state_manager:
-                state_data = {
-                    'pending_news': self.pending_news,
-                    'stats': self.stats,
-                    'last_save': time.time()
-                }
-                self.state_manager.save_state(state_data)
-                logger.debug(f"💾 Saved state with {len(self.pending_news)} pending items")
-        except Exception as e:
-            logger.error(f"Error saving pending news: {e}")
+            logger.error(f"❌ Error getting admin bot entity: {e}")
+            return None
 
     async def load_pending_news(self):
-        """Load pending news from state with error handling."""
+        """Load pending news from state file."""
         try:
-            if self.state_manager:
-                state = self.state_manager.load_state()
-                self.pending_news = state.get('pending_news', {})
-                saved_stats = state.get('stats', {})
-                self.stats.update(saved_stats)
-                
-                # Clean up very old pending items (older than 24 hours)
-                current_time = time.time()
-                old_items = []
-                for approval_id, news_data in self.pending_news.items():
-                    if current_time - news_data['timestamp'] > 86400:  # 24 hours
-                        old_items.append(approval_id)
-                
-                for approval_id in old_items:
-                    del self.pending_news[approval_id]
-                    logger.info(f"🗑️  Cleaned up old pending item: {approval_id}")
-                
-                if old_items:
-                    await self.save_pending_news()
+            if self.state_file.exists():
+                with open(self.state_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.pending_news = data.get('pending_news', {})
+                    self.processed_messages = set(data.get('processed_messages', []))
+                    self.stats.update(data.get('stats', {}))
                 
                 logger.info(f"📂 Loaded {len(self.pending_news)} pending news items")
-            
+            else:
+                logger.info("📂 No existing state file found, starting fresh")
+                
         except Exception as e:
-            logger.error(f"Error loading pending news: {e}")
+            logger.error(f"❌ Error loading pending news: {e}")
             self.pending_news = {}
+            self.processed_messages = set()
 
-    async def get_channel_info(self, channel_username):
-        """Get information about a channel."""
+    async def save_pending_news(self):
+        """Save pending news to state file."""
         try:
-            if not channel_username.startswith('@'):
-                channel_username = '@' + channel_username
-            
-            channel = await self.client_manager.client.get_entity(channel_username)
-            
-            return {
-                'id': channel.id,
-                'title': getattr(channel, 'title', 'Unknown'),
-                'username': getattr(channel, 'username', channel_username),
-                'participants_count': getattr(channel, 'participants_count', 0)
+            data = {
+                'pending_news': self.pending_news,
+                'processed_messages': list(self.processed_messages),
+                'stats': self.stats,
+                'last_updated': time.time()
             }
+            
+            with open(self.state_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                
+            logger.debug("💾 Pending news state saved")
+            
         except Exception as e:
-            logger.error(f"Error getting info for {channel_username}: {e}")
-            return None
+            logger.error(f"❌ Error saving pending news: {e}")
+
+    async def clean_expired_pending_news(self, max_age_hours=24):
+        """Clean expired pending news items."""
+        try:
+            current_time = time.time()
+            expired_ids = []
+            
+            for news_id, news_data in self.pending_news.items():
+                timestamp = news_data.get('timestamp', 0)
+                age_hours = (current_time - timestamp) / 3600
+                
+                if age_hours > max_age_hours:
+                    expired_ids.append(news_id)
+            
+            # Remove expired items
+            for news_id in expired_ids:
+                del self.pending_news[news_id]
+            
+            if expired_ids:
+                logger.info(f"🧹 Cleaned {len(expired_ids)} expired pending news items")
+                await self.save_pending_news()
+                
+        except Exception as e:
+            logger.error(f"❌ Error cleaning expired pending news: {e}")
 
     def get_statistics(self):
-        """Get current processing statistics."""
+        """Get comprehensive statistics."""
         uptime = time.time() - self.stats.get('session_start', time.time())
+        
         return {
             **self.stats,
             'pending_approvals': len(self.pending_news),
             'processed_messages_cache': len(self.processed_messages),
             'uptime_seconds': uptime,
-            'uptime_hours': uptime / 3600
+            'uptime_hours': uptime / 3600,
+            'approval_rate': (self.stats.get('news_approved', 0) / 
+                            max(1, self.stats.get('news_sent_for_approval', 1))) * 100,
+            'detection_rate': (self.stats.get('news_detected', 0) / 
+                             max(1, self.stats.get('messages_processed', 1))) * 100
         }
 
     async def force_process_recent_messages(self, channel_username, num_messages=5):
@@ -554,81 +566,37 @@ class NewsHandler:
             
             async for message in self.client_manager.client.iter_messages(channel, limit=num_messages):
                 if message.text:
-                    logger.info(f"📝 Processing message {message.id}: {message.text[:100]}...")
+                    logger.info(f"📝 Force processing message {message.id}: {message.text[:100]}...")
                     
                     # Force process regardless of previous processing
-                    if self.news_detector:
-                        is_news = self.news_detector.is_news(message.text)
-                        logger.info(f"   📰 News detection: {is_news}")
+                    if self.news_detector.is_news(message.text):
+                        logger.info(f"   📰 Financial news detected: True")
                         
-                        if is_news:
-                            try:
-                                from src.services.news_filter import NewsFilter
-                                is_relevant, score, topics = NewsFilter.is_relevant_news(message.text)
-                            except:
-                                is_relevant, score, topics = True, 1, ["test"]
-                            
-                            logger.info(f"   🎯 Relevance: {is_relevant}, Score: {score}, Topics: {topics[:3]}")
-                            
-                            if is_relevant:
-                                # Process without duplicate checking
-                                cleaned = self.news_detector.clean_news_text(message.text)
-                                approval_id = await self.send_to_approval_bot(cleaned, None, channel_username)
-                                if approval_id:
-                                    processed_count += 1
-                                    logger.info(f"   ✅ Sent for approval: {approval_id}")
+                        try:
+                            is_relevant, score, topics = NewsFilter.is_relevant_news(message.text)
+                        except:
+                            is_relevant, score, topics = True, 3, ["force_test"]
+                        
+                        logger.info(f"   🎯 Relevance: {is_relevant}, Score: {score}, Topics: {topics[:3]}")
+                        
+                        if is_relevant:
+                            # Process without duplicate checking
+                            cleaned = self.news_detector.clean_news_text(message.text)
+                            approval_id = await self.send_to_approval_bot(
+                                cleaned, 
+                                None, 
+                                channel_username.replace('@', ''),
+                                {'score': score, 'topics': topics}
+                            )
+                            if approval_id:
+                                processed_count += 1
+                                logger.info(f"   ✅ Sent for approval: {approval_id}")
+                    else:
+                        logger.info(f"   ❌ Not detected as financial news")
             
             logger.info(f"🔧 Force processing complete: {processed_count} items sent for approval")
             return processed_count > 0
             
         except Exception as e:
-            logger.error(f"Error in force processing: {e}")
+            logger.error(f"❌ Error in force processing: {e}")
             return False
-
-    async def test_news_detection(self, text):
-        """Test news detection on specific text with detailed output."""
-        print("🧪 Testing News Detection")
-        print("=" * 50)
-        print(f"📝 Text: {text[:200]}{'...' if len(text) > 200 else ''}")
-        print(f"📏 Length: {len(text)} characters")
-        
-        # Test detection
-        if self.news_detector:
-            is_news = self.news_detector.is_news(text)
-            print(f"📰 Detected as news: {is_news}")
-            
-            if is_news:
-                # Test cleaning
-                cleaned = self.news_detector.clean_news_text(text)
-                print(f"🧹 Cleaned text: {cleaned[:300]}{'...' if len(cleaned) > 300 else ''}")
-                
-                # Test filtering
-                try:
-                    from src.services.news_filter import NewsFilter
-                    is_relevant, score, topics = NewsFilter.is_relevant_news(cleaned)
-                except:
-                    is_relevant, score, topics = True, 1, ["test"]
-                    
-                print(f"🎯 Relevant: {is_relevant}")
-                print(f"📊 Score: {score}")
-                print(f"🏷️  Topics: {topics[:5]}")
-                
-                # Test segmentation
-                segments = self.news_detector.split_combined_news(text)
-                if len(segments) > 1:
-                    print(f"📋 Split into {len(segments)} segments")
-                
-                # Test metadata extraction
-                metadata = self.news_detector.extract_news_metadata(text)
-                print(f"📋 Metadata: {metadata}")
-                
-                if is_relevant:
-                    print("✅ This news would be sent for admin approval")
-                else:
-                    print("❌ This news would be filtered out")
-                    
-                return is_news, is_relevant
-        else:
-            print("❌ News detector not available")
-            
-        return False, False

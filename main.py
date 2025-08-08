@@ -1,47 +1,48 @@
+#!/usr/bin/env python3
 """
-Telegram News Detector - Complete Standalone Application
-Enhanced version with full news detection, filtering, and admin approval workflow.
+Complete main.py for Financial News Detector Bot.
+Keeps running to handle approval commands and has proper Ctrl+C handling.
 """
 import asyncio
 import logging
-import signal
 import sys
 import time
 import argparse
+import signal
 from pathlib import Path
 
 # Add project root to Python path
 project_root = Path(__file__).resolve().parent
 sys.path.insert(0, str(project_root))
 
-# Import with error handling
+# Import modules
 try:
-    from src.utils.logger import setup_logging
-    from src.client.telegram_client import TelegramClientManager
     from src.handlers.news_handler import NewsHandler
-    from src.utils.time_utils import is_operating_hours, get_current_time, get_formatted_time
+    from src.client.telegram_client import TelegramClientManager
+    from src.utils.logger import setup_logging
+    from src.utils.time_utils import is_operating_hours, get_current_time
     from config.credentials import validate_credentials
     from config.settings import (
-        NEWS_CHECK_INTERVAL, NEWS_CHANNEL, TWITTER_NEWS_CHANNEL, ALL_NEWS_CHANNELS,
-        FORCE_24_HOUR_OPERATION, OPERATION_START_HOUR, OPERATION_END_HOUR,
-        DEBUG_MODE, TEST_MODE, HEALTH_CHECK_INTERVAL
+        NEWS_CHECK_INTERVAL, NEWS_CHANNEL, TWITTER_NEWS_CHANNEL, 
+        TARGET_CHANNEL_ID, OPERATION_START_HOUR, OPERATION_END_HOUR
     )
+    print("✅ All imports successful")
 except ImportError as e:
     print(f"❌ Import error: {e}")
-    print("Make sure you have copied all the required files and run from project root")
+    print("Please ensure all required files are in place")
     sys.exit(1)
 
 # Set up logging
 logger = setup_logging()
-logger.info("🚀 Starting Telegram News Detector...")
+logger.info("🚀 Starting Financial News Detector Bot...")
 
 # Global shutdown flag
 should_exit = False
-
+bot_instance = None
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Telegram News Detector - Complete Version')
+    parser = argparse.ArgumentParser(description='Financial News Detector Bot')
     parser.add_argument('--test-news', action='store_true',
                         help='Test news detection and processing')
     parser.add_argument('--news-text', type=str,
@@ -56,42 +57,53 @@ def parse_args():
                         help='Show current statistics and exit')
     return parser.parse_args()
 
-
 def signal_handler(sig, frame):
     """Handle termination signals gracefully."""
-    global should_exit
+    global should_exit, bot_instance
     logger.info(f"📡 Received signal {sig}, initiating graceful shutdown...")
     should_exit = True
-
+    
+    # If we have a bot instance, signal it to stop
+    if bot_instance:
+        bot_instance.request_shutdown()
 
 # Register signal handlers
 signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
 signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
 
-
-class NewsDetectorBot:
-    """Enhanced news detector application with complete functionality."""
+class FinancialNewsBot:
+    """Complete financial news detector bot."""
 
     def __init__(self, force_24h=False, debug_mode=False):
-        """Initialize the news detector bot."""
+        """Initialize the financial news bot."""
         self.client_manager = TelegramClientManager()
-        self.news_handler = NewsHandler(self.client_manager)
+        self.news_handler = None
         self.running = False
         self.start_time = None
-        self.force_24h = force_24h or FORCE_24_HOUR_OPERATION
-        self.debug_mode = debug_mode or DEBUG_MODE
+        self.force_24h = force_24h
+        self.debug_mode = debug_mode
+        self.shutdown_requested = False
         
-        # Background tasks
-        self.health_check_task = None
-        self.stats_task = None
+        # Statistics
+        self.stats = {
+            'total_updates': 0,
+            'news_processed': 0,
+            'news_sent_for_approval': 0,
+            'news_approved': 0,
+            'news_published': 0,
+            'errors': 0,
+            'start_time': None
+        }
+
+    def request_shutdown(self):
+        """Request graceful shutdown."""
+        self.shutdown_requested = True
+        self.running = False
 
     async def start(self):
-        """Start the news detector bot with enhanced initialization."""
-        logger.info("⚙️  Initializing News Detector Bot...")
+        """Start the financial news bot."""
+        logger.info("⚙️ Initializing Financial News Bot...")
         
-        self.running = True
-        self.start_time = time.time()
-
         try:
             # Validate credentials first
             logger.info("🔐 Validating credentials...")
@@ -101,374 +113,356 @@ class NewsDetectorBot:
             # Start the Telegram client
             logger.info("📱 Starting Telegram client...")
             if not await self.client_manager.start():
-                logger.error("❌ Failed to start Telegram client. Exiting.")
+                logger.error("❌ Failed to start Telegram client")
                 return False
 
-            # Set up news approval handler
+            # Initialize news handler
+            logger.info("📰 Initializing news handler...")
+            self.news_handler = NewsHandler(self.client_manager)
+            
+            # Initialize the news handler with Bot API
+            if hasattr(self.news_handler, 'initialize'):
+                await self.news_handler.initialize()
+
+            # Set up news approval handler - CRITICAL for approval workflow
             logger.info("👨‍💼 Setting up news approval handler...")
             if not await self.news_handler.setup_approval_handler():
-                logger.warning("⚠️  Failed to set up news approval handler. Manual approval may be required.")
-
+                logger.warning("⚠️ Failed to set up news approval handler")
+                
             # Load existing state
             logger.info("📂 Loading application state...")
-            await self.news_handler.load_pending_news()
+            if hasattr(self.news_handler, 'load_pending_news'):
+                await self.news_handler.load_pending_news()
 
-            # Test bot API connection
-            logger.info("🤖 Testing Bot API connection...")
-            if self.news_handler.bot_api and hasattr(self.news_handler.bot_api, 'test_connection'):
-                self.news_handler.bot_api.test_connection()
-
-            # Start background tasks
-            self.health_check_task = asyncio.create_task(self.health_check())
-            self.stats_task = asyncio.create_task(self.periodic_stats())
-
-            # Log configuration summary
+            self.running = True
+            self.start_time = time.time()
+            self.stats['start_time'] = self.start_time
+            
+            # Log startup info
             self._log_startup_info()
 
-            logger.info("🎉 News Detector Bot started successfully!")
+            logger.info("🎉 Financial News Bot started successfully!")
+            logger.info("🔄 Bot is now running and ready to handle approval commands...")
             return True
 
         except Exception as e:
-            logger.error(f"❌ Failed to start news detector bot: {e}")
+            logger.error(f"❌ Failed to start financial news bot: {e}")
             if self.debug_mode:
                 import traceback
                 traceback.print_exc()
             return False
 
     def _log_startup_info(self):
-        """Log startup information and configuration."""
-        logger.info("📊 Startup Configuration:")
-        logger.info(f"   🕐 Operating Hours: {OPERATION_START_HOUR}:00 - {OPERATION_END_HOUR}:00 Tehran")
-        logger.info(f"   ⏰ 24/7 Mode: {self.force_24h}")
-        logger.info(f"   📺 News Channels: {len(ALL_NEWS_CHANNELS)}")
-        for i, channel in enumerate(ALL_NEWS_CHANNELS[:3], 1):
-            logger.info(f"      {i}. @{channel}")
-        if len(ALL_NEWS_CHANNELS) > 3:
-            logger.info(f"      ... and {len(ALL_NEWS_CHANNELS) - 3} more")
-        logger.info(f"   ⏱️  Check Interval: {NEWS_CHECK_INTERVAL} seconds")
-        logger.info(f"   🔍 Debug Mode: {self.debug_mode}")
+        """Log startup information."""
+        logger.info("=" * 60)
+        logger.info("📊 FINANCIAL NEWS DETECTOR CONFIGURATION")
+        logger.info("=" * 60)
+        logger.info(f"🎯 Target Channel: {TARGET_CHANNEL_ID}")
+        logger.info(f"📺 News Channels: {NEWS_CHANNEL}, {TWITTER_NEWS_CHANNEL}")
+        logger.info(f"⏰ Check Interval: {NEWS_CHECK_INTERVAL}s")
+        logger.info(f"🕐 Operating Hours: {OPERATION_START_HOUR}:00 - {OPERATION_END_HOUR}:00 Tehran")
+        logger.info(f"🌐 24h Mode: {'Enabled' if self.force_24h else 'Disabled'}")
+        logger.info(f"🐛 Debug Mode: {'Enabled' if self.debug_mode else 'Disabled'}")
+        logger.info(f"💰 Focus: Gold, Currencies, Iranian Economy, Oil, Crypto")
+        logger.info("=" * 60)
 
-    async def stop(self):
-        """Stop the news detector bot gracefully."""
-        logger.info("🛑 Stopping News Detector Bot...")
+    async def run_continuous_monitoring(self):
+        """Main continuous monitoring loop."""
+        logger.info("🔄 Starting continuous news monitoring...")
+        logger.info("💡 The bot will now keep running to handle approval commands")
+        logger.info("💡 Use Ctrl+C to stop the bot gracefully")
         
-        self.running = False
-
-        # Cancel background tasks
-        tasks_to_cancel = [self.health_check_task, self.stats_task]
-        for task in tasks_to_cancel:
-            if task and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-
-        # Save final state
-        if self.news_handler:
-            logger.info("💾 Saving final state...")
-            await self.news_handler.save_pending_news()
-
-        # Stop client
-        if self.client_manager:
-            await self.client_manager.stop()
-
-        # Log final statistics
-        if self.news_handler:
-            final_stats = self.news_handler.get_statistics()
-            logger.info("📈 Final Statistics:")
-            logger.info(f"   Messages Processed: {final_stats.get('messages_processed', 0)}")
-            logger.info(f"   News Detected: {final_stats.get('news_detected', 0)}")
-            logger.info(f"   Sent for Approval: {final_stats.get('news_sent_for_approval', 0)}")
-            logger.info(f"   News Approved: {final_stats.get('news_approved', 0)}")
-            logger.info(f"   News Filtered: {final_stats.get('news_filtered_out', 0)}")
-
-        logger.info("✅ News Detector Bot stopped successfully")
-
-    async def health_check(self):
-        """Enhanced periodic health check."""
-        logger.info("💓 Health check monitor started")
-        
-        while self.running:
-            try:
-                # Check client connection
-                connection_ok = False
-                if self.client_manager.client:
-                    connection_ok = self.client_manager.client.is_connected()
-                
-                if not connection_ok:
-                    logger.warning("⚠️  Telegram client connection lost")
-                
-                # Calculate and log uptime
-                uptime = time.time() - self.start_time
-                hours = int(uptime // 3600)
-                minutes = int((uptime % 3600) // 60)
-                
-                # Get statistics
-                if self.news_handler:
-                    stats = self.news_handler.get_statistics()
-                    pending_count = stats.get('pending_approvals', 0)
-                    processed_today = stats.get('messages_processed', 0)
-                else:
-                    pending_count = 0
-                    processed_today = 0
-                
-                # Log health status
-                status_icon = "🟢" if connection_ok else "🔴"
-                logger.info(f"{status_icon} Health Check - Uptime: {hours}h {minutes}m | "
-                          f"Pending: {pending_count} | Processed: {processed_today}")
-                
-                # Wait for next health check
-                await asyncio.sleep(HEALTH_CHECK_INTERVAL)
-
-            except asyncio.CancelledError:
-                logger.debug("Health check cancelled")
-                break
-            except Exception as e:
-                logger.error(f"❌ Health check error: {e}")
-                await asyncio.sleep(60)
-
-    async def periodic_stats(self):
-        """Log periodic statistics."""
-        while self.running:
-            try:
-                await asyncio.sleep(1800)  # Every 30 minutes
-                
-                if self.news_handler:
-                    stats = self.news_handler.get_statistics()
-                    from src.utils.logger import log_statistics
-                    log_statistics(stats)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in stats logging: {e}")
-                await asyncio.sleep(300)
-
-    async def run_news_monitoring(self):
-        """Enhanced main news monitoring loop."""
-        logger.info("🔍 Starting enhanced news monitoring...")
-
-        while self.running and not should_exit:
-            try:
-                # Check operating hours
-                if not self.force_24h and not is_operating_hours():
-                    current_time = get_formatted_time()
-                    logger.info(f"🌙 Outside operating hours ({OPERATION_START_HOUR}:00-{OPERATION_END_HOUR}:00 Tehran). "
-                              f"Current time: {current_time}. Sleeping...")
-                    await asyncio.sleep(900)  # 15 minutes
-                    continue
-
-                logger.info("🔍 Starting news check cycle...")
-
-                # Process each news channel
-                total_processed = 0
-                for channel in ALL_NEWS_CHANNELS:
-                    if should_exit:
-                        break
-                    
-                    try:
-                        logger.info(f"📺 Processing channel: @{channel}")
-                        result = await self.news_handler.process_news_messages(channel)
-                        
-                        if result:
-                            logger.info(f"✅ Successfully processed news from @{channel}")
-                            total_processed += 1
-                        else:
-                            logger.debug(f"ℹ️  No new news found in @{channel}")
-                            
-                        # Delay between channels to avoid rate limits
-                        await asyncio.sleep(3)
-                        
-                    except Exception as e:
-                        logger.error(f"❌ Error processing @{channel}: {e}")
-
-                # Check for approval timeouts
-                try:
-                    await self.news_handler.check_approval_timeouts()
-                except Exception as e:
-                    logger.error(f"Error checking approval timeouts: {e}")
-
-                # Log cycle completion
-                if total_processed > 0:
-                    logger.info(f"✅ News cycle complete: processed {total_processed} channels")
-                else:
-                    logger.debug("ℹ️  News cycle complete: no new news found")
-
-                # Wait for next check cycle
-                logger.info(f"⏳ Next news check in {NEWS_CHECK_INTERVAL} seconds "
-                          f"({NEWS_CHECK_INTERVAL // 60} minutes)")
-                await asyncio.sleep(NEWS_CHECK_INTERVAL)
-
-            except Exception as e:
-                logger.error(f"❌ Error in news monitoring loop: {e}")
-                if self.debug_mode:
-                    import traceback
-                    traceback.print_exc()
-                await asyncio.sleep(60)
-
-    async def test_news_detection(self, news_text=None, channel=None):
-        """Test news detection functionality with detailed output."""
-        logger.info("🧪 Starting news detection test...")
-
-        if news_text:
-            # Test specific text
-            print("\n" + "="*60)
-            print("📝 TESTING SPECIFIC TEXT")
-            print("="*60)
-            
-            try:
-                is_news, is_relevant = await self.news_handler.test_news_detection(news_text)
-                
-                if is_news and is_relevant:
-                    print("🎉 RESULT: Text would be sent for admin approval")
-                elif is_news:
-                    print("⚠️  RESULT: Text detected as news but filtered out")
-                else:
-                    print("❌ RESULT: Text not detected as news")
-                    
-            except Exception as e:
-                print(f"❌ Error testing text: {e}")
-
-        if channel:
-            # Test channel processing
-            print(f"\n" + "="*60)
-            print(f"📺 TESTING CHANNEL: @{channel}")
-            print("="*60)
-            
-            try:
-                # Get channel info first
-                channel_info = await self.news_handler.get_channel_info(channel)
-                if channel_info:
-                    print(f"📊 Channel Info:")
-                    print(f"   Title: {channel_info.get('title', 'Unknown')}")
-                    print(f"   Participants: {channel_info.get('participants_count', 0)}")
-                
-                # Test processing
-                result = await self.news_handler.process_news_messages(channel)
-                
-                if result:
-                    print("✅ RESULT: Found and processed news from channel")
-                else:
-                    print("ℹ️  RESULT: No new news found in channel")
-                
-                # Show pending approvals
-                pending = len(self.news_handler.pending_news)
-                print(f"📋 Pending Approvals: {pending}")
-                
-            except Exception as e:
-                print(f"❌ Error testing channel: {e}")
-
-        # Show statistics
-        if self.news_handler:
-            stats = self.news_handler.get_statistics()
-            print(f"\n📊 Current Statistics:")
-            for key, value in stats.items():
-                print(f"   {key}: {value}")
-
-        print("\n✅ News detection test complete")
-
-    async def show_statistics(self):
-        """Show current statistics and exit."""
-        logger.info("📊 Retrieving current statistics...")
+        last_news_check = 0
+        last_status_log = 0
         
         try:
-            # Start minimal setup to access state
-            await self.news_handler.load_pending_news()
+            while self.running and not should_exit and not self.shutdown_requested:
+                try:
+                    current_time = time.time()
+                    
+                    # Check if we're in operating hours (unless force 24h)
+                    if not self.force_24h and not is_operating_hours():
+                        if current_time - last_status_log >= 3600:  # Log every hour when outside hours
+                            logger.info("💤 Outside operating hours, bot is idle but ready for approvals...")
+                            last_status_log = current_time
+                        await asyncio.sleep(300)  # Check every 5 minutes when outside hours
+                        continue
+                    
+                    # News processing
+                    if current_time - last_news_check >= NEWS_CHECK_INTERVAL:
+                        await self._process_news_updates()
+                        last_news_check = current_time
+                        self.stats['total_updates'] += 1
+                    
+                    # Log status every 30 minutes during active hours
+                    if current_time - last_status_log >= 1800:
+                        await self._log_status()
+                        last_status_log = current_time
+                    
+                    # Sleep for a short interval (this allows approval commands to be processed)
+                    await asyncio.sleep(60)  # Check every minute
+                    
+                except asyncio.CancelledError:
+                    logger.info("🛑 Monitoring loop cancelled")
+                    break
+                except Exception as e:
+                    logger.error(f"Error in monitoring loop: {e}")
+                    self.stats['errors'] += 1
+                    if self.debug_mode:
+                        import traceback
+                        traceback.print_exc()
+                    await asyncio.sleep(60)  # Wait before retrying
+                    
+        except KeyboardInterrupt:
+            logger.info("⌨️ Received keyboard interrupt in monitoring loop")
+        finally:
+            await self.stop()
+
+    async def _process_news_updates(self):
+        """Process news updates from configured channels."""
+        try:
+            logger.info("📰 Processing financial news updates...")
             
-            stats = self.news_handler.get_statistics()
+            # Get news channels
+            news_channels = []
+            if NEWS_CHANNEL:
+                news_channels.append(NEWS_CHANNEL)
+            if TWITTER_NEWS_CHANNEL:
+                news_channels.append(TWITTER_NEWS_CHANNEL)
             
-            print("\n📊 News Detector Statistics")
-            print("="*50)
-            print(f"📈 Messages Processed: {stats.get('messages_processed', 0)}")
-            print(f"📰 News Detected: {stats.get('news_detected', 0)}")
-            print(f"📤 Sent for Approval: {stats.get('news_sent_for_approval', 0)}")
-            print(f"✅ News Approved: {stats.get('news_approved', 0)}")
-            print(f"🚫 News Filtered Out: {stats.get('news_filtered_out', 0)}")
-            print(f"❌ Errors: {stats.get('errors', 0)}")
-            print(f"⏳ Pending Approvals: {stats.get('pending_approvals', 0)}")
+            if not news_channels:
+                logger.warning("No news channels configured")
+                return
             
-            # Show pending items
-            if stats.get('pending_approvals', 0) > 0:
-                print(f"\n📋 Pending Approval Items:")
-                for i, (approval_id, news_data) in enumerate(list(self.news_handler.pending_news.items())[:5], 1):
-                    age = time.time() - news_data['timestamp']
-                    age_str = f"{int(age//3600)}h {int((age%3600)//60)}m ago"
-                    source = news_data.get('source_channel', 'Unknown')
-                    print(f"   {i}. ID: {approval_id} | Source: @{source} | Age: {age_str}")
-                
-                if len(self.news_handler.pending_news) > 5:
-                    remaining = len(self.news_handler.pending_news) - 5
-                    print(f"   ... and {remaining} more items")
+            # Process news from each channel
+            for channel in news_channels:
+                try:
+                    logger.info(f"Processing financial news from: {channel}")
+                    result = await self.news_handler.process_news_messages(channel)
+                    if result:
+                        self.stats['news_processed'] += 1
+                        logger.info(f"✅ Successfully processed financial news from {channel}")
+                    else:
+                        logger.debug(f"No new financial news found in {channel}")
+                        
+                    # Small delay between channels
+                    await asyncio.sleep(5)
+                    
+                except Exception as channel_error:
+                    logger.error(f"Error processing news from {channel}: {channel_error}")
+                    self.stats['errors'] += 1
+                    continue
             
-            # Calculate rates if we have data
-            uptime_hours = stats.get('uptime_hours', 0)
-            if uptime_hours > 0:
-                detection_rate = stats.get('news_detected', 0) / uptime_hours
-                approval_rate = stats.get('news_approved', 0) / uptime_hours
-                print(f"\n📈 Hourly Rates:")
-                print(f"   Detection Rate: {detection_rate:.1f} news/hour")
-                print(f"   Approval Rate: {approval_rate:.1f} approved/hour")
+            # Clean expired pending news
+            if hasattr(self.news_handler, 'clean_expired_pending_news'):
+                await self.news_handler.clean_expired_pending_news()
+            
+            logger.info("✅ Financial news processing completed")
             
         except Exception as e:
-            logger.error(f"Error retrieving statistics: {e}")
+            logger.error(f"❌ Error in news processing: {e}")
+            self.stats['errors'] += 1
 
+    async def _log_status(self):
+        """Log current bot status."""
+        if self.start_time:
+            uptime = int(time.time() - self.start_time)
+            pending_count = len(self.news_handler.pending_news) if self.news_handler else 0
+            
+            logger.info(f"📊 STATUS - Uptime: {uptime}s | "
+                       f"News Processed: {self.stats['news_processed']} | "
+                       f"Pending Approvals: {pending_count} | "
+                       f"Errors: {self.stats['errors']}")
+            
+            if pending_count > 0:
+                logger.info(f"⏳ {pending_count} news items waiting for approval")
+
+    async def test_financial_news_detection(self, news_text=None, channel=None):
+        """Test financial news detection functionality."""
+        logger.info("🧪 Testing financial news detection...")
+        
+        # If no specific test provided, run default financial tests
+        if not news_text and not channel:
+            logger.info("No specific test provided, running default financial tests...")
+            
+            # Test 1: Gold news (should detect)
+            gold_news = "قیمت طلای ۱۸ عیار امروز به ۲ میلیون و ۵۰۰ هزار تومان رسید و سکه طلا نیز افزایش یافت"
+            await self._test_single_news_text(gold_news, "Gold News Test")
+            
+            # Test 2: Currency news (should detect)
+            currency_news = "نرخ دلار در بازار آزاد به ۵۲ هزار تومان رسید و یورو نیز ۵۵ هزار تومان شد"
+            await self._test_single_news_text(currency_news, "Currency News Test")
+            
+            # Test 3: Iranian economy news (should detect)
+            economy_news = "بانک مرکزی نرخ سود بانکی را ۲۲ درصد اعلام کرد و تورم به ۴۰ درصد رسید"
+            await self._test_single_news_text(economy_news, "Iranian Economy Test")
+            
+            # Test 4: Non-financial content (should not detect)
+            non_financial = "تیم فوتبال پرسپولیس امشب مقابل استقلال بازی دارد و موسیقی زیبایی پخش خواهد شد"
+            await self._test_single_news_text(non_financial, "Non-Financial Test")
+            
+            # Test 5: Channel processing
+            if NEWS_CHANNEL:
+                logger.info(f"Testing channel processing: {NEWS_CHANNEL}")
+                try:
+                    result = await self.news_handler.process_news_messages(NEWS_CHANNEL)
+                    logger.info(f"✅ Channel processing result: {result}")
+                except Exception as e:
+                    logger.error(f"❌ Channel processing error: {e}")
+            
+            return
+        
+        if news_text:
+            await self._test_single_news_text(news_text, "Provided Text")
+        
+        if channel:
+            logger.info(f"Testing channel processing: {channel}")
+            try:
+                result = await self.news_handler.process_news_messages(channel)
+                logger.info(f"Channel processing result: {result}")
+            except Exception as e:
+                logger.error(f"Channel processing error: {e}")
+
+    async def _test_single_news_text(self, news_text, test_name):
+        """Test a single news text for financial content."""
+        logger.info(f"🧪 Testing {test_name}...")
+        logger.info(f"📝 Text: {news_text[:100]}...")
+        
+        if self.news_handler and self.news_handler.news_detector:
+            is_news = self.news_handler.news_detector.is_news(news_text)
+            logger.info(f"📊 Financial news detection result: {is_news}")
+            
+            if is_news:
+                # Get financial category
+                category = self.news_handler.news_detector.get_financial_category(news_text)
+                logger.info(f"💰 Financial category: {category}")
+                
+                cleaned = self.news_handler.news_detector.clean_news_text(news_text)
+                logger.info(f"🧹 Cleaned text length: {len(cleaned)}")
+                logger.info(f"🧹 Cleaned preview: {cleaned[:150]}...")
+                
+                # Test relevance filtering
+                try:
+                    from src.services.news_filter import NewsFilter
+                    is_relevant, score, topics = NewsFilter.is_relevant_news(cleaned)
+                    logger.info(f"🎯 Relevance: {is_relevant}, Score: {score}, Topics: {topics[:5]}")
+                except Exception as e:
+                    logger.warning(f"NewsFilter test failed: {e}")
+                    is_relevant, score = True, 3
+                
+                if is_relevant:
+                    # Test sending to approval bot
+                    logger.info("📤 Testing approval bot sending...")
+                    approval_id = await self.news_handler.send_to_approval_bot(cleaned)
+                    if approval_id:
+                        logger.info(f"✅ Financial news sent for approval with ID: {approval_id}")
+                        logger.info(f"💡 To approve, send to your admin bot: /submit{approval_id}")
+                        self.stats['news_sent_for_approval'] += 1
+                    else:
+                        logger.error("❌ Failed to send financial news for approval")
+                else:
+                    logger.info("❌ Financial news was filtered out due to low relevance")
+            else:
+                logger.info("❌ Text was not detected as financial news (expected for non-financial content)")
+        else:
+            logger.error("❌ News detector not available")
+
+    async def show_statistics(self):
+        """Show current statistics."""
+        logger.info("📊 CURRENT FINANCIAL NEWS STATISTICS")
+        logger.info("=" * 50)
+        
+        if self.start_time:
+            uptime = int(time.time() - self.start_time)
+            hours = uptime // 3600
+            minutes = (uptime % 3600) // 60
+            logger.info(f"⏰ Uptime: {hours}h {minutes}m ({uptime}s)")
+        
+        for key, value in self.stats.items():
+            if key != 'start_time':
+                logger.info(f"📈 {key.replace('_', ' ').title()}: {value}")
+        
+        if self.news_handler and hasattr(self.news_handler, 'pending_news'):
+            pending_count = len(self.news_handler.pending_news)
+            logger.info(f"⏳ Pending News: {pending_count}")
+            
+            if pending_count > 0:
+                logger.info("📋 Pending news items:")
+                for i, (news_id, news_data) in enumerate(list(self.news_handler.pending_news.items())[:3]):
+                    text_preview = news_data.get('text', '')[:80]
+                    logger.info(f"   {i+1}. ID: {news_id} - {text_preview}...")
+
+    async def stop(self):
+        """Stop the bot gracefully."""
+        logger.info("🛑 Stopping Financial News Bot...")
+        self.running = False
+        
+        try:
+            # Save news state
+            if self.news_handler and hasattr(self.news_handler, 'save_pending_news'):
+                await self.news_handler.save_pending_news()
+                logger.info("💾 News state saved")
+            
+            # Stop client
+            if self.client_manager:
+                await self.client_manager.stop()
+                logger.info("📱 Telegram client stopped")
+                
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
 
 async def main():
-    """Enhanced main entry point."""
+    """Main entry point."""
+    global bot_instance
+    
     args = parse_args()
-
-    # Enable debug mode if requested
+    
+    # Enable debug logging if requested
     if args.debug:
-        from src.utils.logger import setup_debug_logging
-        setup_debug_logging()
-
-    # Create news detector bot
-    bot = NewsDetectorBot(force_24h=args.force_24h, debug_mode=args.debug)
-
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("🐛 Debug mode enabled")
+    
+    # Create bot instance
+    bot_instance = FinancialNewsBot(force_24h=args.force_24h, debug_mode=args.debug)
+    
     try:
+        # Start the bot
+        if not await bot_instance.start():
+            logger.error("❌ Failed to start financial news bot")
+            return 1
+
         # Handle different modes
         if args.stats:
             # Show statistics and exit
-            await bot.show_statistics()
+            await bot_instance.show_statistics()
             return 0
 
         if args.test_news:
             # Test mode
             logger.info("🧪 Running in test mode")
-            
-            if not await bot.start():
-                logger.error("❌ Failed to start bot for testing")
-                return 1
-            
-            await bot.test_news_detection(
+            await bot_instance.test_financial_news_detection(
                 news_text=args.news_text,
                 channel=args.news_channel
             )
-            
-            await bot.stop()
             return 0
 
-        # Normal operation mode
+        # Normal operation mode - KEEP RUNNING
         logger.info("🚀 Running in normal operation mode")
+        logger.info("🔄 Bot will keep running to handle approval commands...")
         
-        if not await bot.start():
-            logger.error("❌ Failed to start news detector bot")
-            return 1
-
         # Log current operating status
         if is_operating_hours():
-            logger.info("🟢 Currently within operating hours - starting immediately")
-        elif bot.force_24h:
-            logger.info("🔵 24-hour operation enabled - starting immediately")
+            logger.info("🟢 Currently within operating hours - active monitoring")
+        elif bot_instance.force_24h:
+            logger.info("🔵 24-hour operation enabled - active monitoring")
         else:
-            logger.info(f"🟡 Outside operating hours - will activate at {OPERATION_START_HOUR}:00 Tehran time")
+            logger.info(f"🟡 Outside operating hours - idle but ready for approvals")
 
-        # Run main monitoring loop
-        await bot.run_news_monitoring()
+        # Run continuous monitoring loop (keeps running until interrupted)
+        await bot_instance.run_continuous_monitoring()
 
     except KeyboardInterrupt:
-        logger.info("⌨️  Received keyboard interrupt")
+        logger.info("⌨️ Received keyboard interrupt")
     except Exception as e:
         logger.error(f"❌ Unexpected error: {e}")
         if args.debug:
@@ -477,18 +471,18 @@ async def main():
         return 1
     finally:
         logger.info("🔄 Performing cleanup...")
-        await bot.stop()
+        if bot_instance:
+            await bot_instance.stop()
 
-    logger.info("👋 News Detector shutdown complete")
+    logger.info("👋 Financial News Detector shutdown complete")
     return 0
-
 
 if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
         sys.exit(exit_code)
     except KeyboardInterrupt:
-        print("\n👋 News detector stopped by user")
+        print("\n👋 Financial news bot stopped by user")
         sys.exit(0)
     except Exception as e:
         print(f"\n❌ Fatal error: {e}")

@@ -1,249 +1,242 @@
 """
-Advanced news filtering service for war/geopolitical news relevance.
-Focuses on Israel-Iran conflict and economic warfare impact.
+Expanded news filter for financial and geopolitical content.
 """
 import logging
 import re
 
 logger = logging.getLogger(__name__)
 
-try:
-    from config.settings import (
-        WAR_NEWS_ONLY, ISRAEL_IRAN_FOCUS, GEOPOLITICAL_ONLY, 
-        MIN_RELEVANCE_SCORE, HIGH_PRIORITY_SCORE
-    )
-except ImportError:
-    # Fallback values
-    WAR_NEWS_ONLY = True
-    ISRAEL_IRAN_FOCUS = True  
-    GEOPOLITICAL_ONLY = True
-    MIN_RELEVANCE_SCORE = 2
-    HIGH_PRIORITY_SCORE = 5
-
-
 class NewsFilter:
-    """Advanced filter for detecting relevant war and geopolitical news."""
-
-    # High-priority topics (3x weight)
-    PRIMARY_TOPICS = [
-        # Core Israel-Iran conflict
-        "اسرائیل", "ایران", "israel", "iran",
-        "نتانیاهو", "netanyahu", "رهبر انقلاب", "khamenei",
+    """Expanded filter for financial and geopolitical news with market impact."""
+    
+    # CRITICAL KEYWORDS (Highest Priority)
+    CRITICAL_KEYWORDS = [
+        # Persian critical
+        "ایران", "اسرائیل", "ترامپ", "بایدن", "جنگ", "حمله", "تهدید", "هسته‌ای",
+        "تحریم", "طلا", "دلار", "یورو", "نفت", "بحران", "اقتصاد",
         
-        # Direct military action
-        "حمله", "بمباران", "موشک", "attack", "bombing", "missile", "strike",
-        "عملیات نظامی", "military operation", "air strike", "drone attack",
-        
-        # Nuclear program  
-        "هسته‌ای", "اورانیوم", "غنی‌سازی", "nuclear", "uranium", "enrichment",
-        "برجام", "jcpoa", "آژانس اتمی", "iaea", "نطنز", "natanz",
-        
-        # Economic warfare
-        "تحریم", "تحریم‌های جدید", "رفع تحریم", "sanctions", "economic pressure",
-        "تحریم نفتی", "oil sanctions", "تحریم بانکی", "banking sanctions",
-        
-        # Key currencies and commodities during conflicts
-        "دلار", "طلا", "نفت", "اونس", "dollar", "gold", "oil", "crude",
-        
-        # Regional proxy conflicts
-        "حماس", "حزب‌الله", "hamas", "hezbollah", "gaza", "غزه", "لبنان", "lebanon",
-        "سوریه", "syria", "عراق", "iraq", "یمن", "yemen", "حوثی", "houthi",
-        
-        # Strategic assets and locations
-        "تنگه هرمز", "strait of hormuz", "خلیج فارس", "persian gulf",
-        "دریای سرخ", "red sea", "کانال سوئز", "suez canal",
-        
-        # War terminology
-        "جنگ", "درگیری", "تنش", "بحران", "war", "conflict", "crisis", "tension"
+        # English critical  
+        "iran", "israel", "trump", "biden", "war", "attack", "threat", "nuclear",
+        "sanctions", "gold", "dollar", "euro", "oil", "crisis", "economy"
     ]
-
-    # Medium priority topics (1x weight)
-    SECONDARY_TOPICS = [
-        # Regional powers
-        "آمریکا", "روسیه", "چین", "usa", "russia", "china", "america",
-        "عربستان", "امارات", "مصر", "ترکیه", "saudi", "uae", "egypt", "turkey",
+    
+    # HIGH PRIORITY KEYWORDS
+    HIGH_PRIORITY_KEYWORDS = [
+        # Persian high priority
+        "آمریکا", "واشنگتن", "تل‌آویو", "تهران", "سپاه", "حزب‌الله", "حماس", "غزه",
+        "موشک", "پهپاد", "بمباران", "عملیات", "نظامی", "ارتش", "بازار", "بورس",
+        "نرخ", "قیمت", "ارز", "صرافی", "بانک‌مرکزی", "تورم", "صادرات", "واردات",
         
-        # International organizations
-        "ناتو", "سازمان ملل", "nato", "united nations", "اتحادیه اروپا", "eu",
-        "شورای امنیت", "security council", "آژانس اتمی", "iaea", "اوپک", "opec",
-        
-        # Economic indicators during conflicts
-        "بازار ارز", "بازار طلا", "قیمت نفت", "بورس", "اقتصاد جهانی",
-        "currency market", "gold market", "oil prices", "global economy",
-        
-        # Military terms
-        "نیروهای مسلح", "سپاه", "ارتش", "دفاع هوایی", "پدافند",
-        "military forces", "defense", "air defense", "army",
-        
-        # Diplomatic terms
-        "مذاکرات", "دیپلماسی", "توافق", "بیانیه", "محکومیت", "هشدار",
-        "negotiations", "diplomacy", "agreement", "statement", "condemnation", "warning"
+        # English high priority
+        "america", "washington", "telaviv", "tehran", "irgc", "hezbollah", "hamas", "gaza",
+        "missile", "drone", "bombing", "operation", "military", "army", "market", "stock",
+        "rate", "price", "currency", "exchange", "central", "bank", "inflation", "export"
     ]
-
-    # Topics to deprioritize or filter out (-2x weight)
-    IRRELEVANT_TOPICS = [
-        # Entertainment
-        "سینما", "فیلم", "موسیقی", "هنرمند", "بازیگر", "خواننده",
-        "cinema", "movie", "music", "artist", "actor", "singer",
-        "کنسرت", "جشنواره", "تلویزیون", "شبکه", "سریال",
-        "concert", "festival", "television", "network", "series",
+    
+    # GEOPOLITICAL REGIONS
+    REGIONAL_KEYWORDS = [
+        # Persian regions
+        "خاورمیانه", "خلیج‌فارس", "فلسطین", "لبنان", "سوریه", "عراق", "یمن", "عربستان",
+        "امارات", "کویت", "قطر", "بحرین", "عمان", "ترکیه", "پاکستان", "افغانستان",
         
-        # Sports
-        "فوتبال", "والیبال", "بسکتبال", "ورزش", "لیگ", "بازیکن", "تیم ملی",
-        "football", "soccer", "volleyball", "sports", "league", "player",
-        "جام جهانی", "المپیک", "قهرمانی", "مسابقه",
-        "world cup", "olympics", "championship", "match",
+        # English regions
+        "middle", "east", "persian", "gulf", "palestine", "lebanon", "syria", "iraq",
+        "yemen", "saudi", "arabia", "uae", "kuwait", "qatar", "bahrain", "oman", "turkey"
+    ]
+    
+    # ECONOMIC WARFARE KEYWORDS
+    ECONOMIC_WARFARE_KEYWORDS = [
+        # Persian economic warfare
+        "جنگ‌اقتصادی", "تحریم‌اقتصادی", "محاصره‌اقتصادی", "فشار‌اقتصادی", "عقوبات",
+        "مسدود‌کردن", "دارایی", "منابع", "سوئیفت", "بانکی", "مالی", "سرمایه",
         
-        # Local non-political news
-        "آب و هوا", "ترافیک", "تصادف", "آتش‌سوزی", "سیل", "زلزله",
-        "weather", "traffic", "accident", "fire", "flood", "earthquake",
-        "هواشناسی", "بارش", "برف", "گرما", "سرما",
-        "forecast", "rain", "snow", "temperature",
-        
-        # Commercial
-        "تبلیغات", "فروش", "خرید", "تخفیف", "رستوران", "کافه", "هتل",
-        "advertisement", "sale", "discount", "restaurant", "cafe", "hotel",
-        "خرید و فروش", "املاک", "اجاره", "استخدام",
-        "buying", "selling", "real estate", "rental", "hiring",
-        
-        # Technology/lifestyle (unless conflict-related)
-        "گوشی", "اپل", "سامسونگ", "اینستاگرام", "تلگرام",
-        "phone", "apple", "samsung", "instagram", "telegram",
-        
-        # Health/medical (unless conflict-related)
-        "پزشک", "بیمارستان", "دارو", "واکسن", "کرونا",
-        "doctor", "hospital", "medicine", "vaccine", "corona"
+        # English economic warfare
+        "economic", "warfare", "embargo", "blockade", "freeze", "assets", "swift",
+        "financial", "monetary", "capital", "trade", "commerce"
     ]
 
     @classmethod
     def is_relevant_news(cls, text):
         """
-        Determine if news is relevant based on war/geopolitical focus with enhanced scoring.
+        Enhanced relevance check for financial and geopolitical news.
         
-        Args:
-            text: News text to analyze
-            
         Returns:
             tuple: (is_relevant, relevance_score, matching_topics)
         """
-        if not text:
+        if not text or len(text.strip()) < 30:
             return False, 0, []
-
+        
         text_lower = text.lower()
+        matching_topics = []
+        relevance_score = 0
         
-        # Find matching topics
-        primary_matches = [topic for topic in cls.PRIMARY_TOPICS 
-                          if topic.lower() in text_lower]
-        secondary_matches = [topic for topic in cls.SECONDARY_TOPICS 
-                           if topic.lower() in text_lower]
-        irrelevant_matches = [topic for topic in cls.IRRELEVANT_TOPICS 
-                            if topic.lower() in text_lower]
+        # Critical keywords (score: 10 each)
+        critical_matches = [kw for kw in cls.CRITICAL_KEYWORDS if kw in text_lower]
+        if critical_matches:
+            relevance_score += len(critical_matches) * 10
+            matching_topics.extend([f"CRITICAL:{kw}" for kw in critical_matches[:3]])
         
-        # Calculate base relevance score
-        relevance_score = (len(primary_matches) * 3) + len(secondary_matches) - (len(irrelevant_matches) * 2)
+        # High priority keywords (score: 5 each)
+        high_matches = [kw for kw in cls.HIGH_PRIORITY_KEYWORDS if kw in text_lower]
+        if high_matches:
+            relevance_score += len(high_matches) * 5
+            matching_topics.extend([f"HIGH:{kw}" for kw in high_matches[:3]])
         
-        # Enhanced pattern matching for high-priority content
-        high_priority_patterns = [
-            # Israel-Iran direct conflict
-            r'اسرائیل.*?حمله.*?ایران', r'ایران.*?حمله.*?اسرائیل',
-            r'israel.*?attack.*?iran', r'iran.*?attack.*?israel',
-            
-            # Missile/military actions
-            r'موشک.*?شلیک.*?شد', r'حمله.*?هوایی', r'بمباران.*?شد',
-            r'missile.*?fired', r'air.*?strike', r'bombing.*?attack',
-            
-            # Nuclear developments
-            r'اورانیوم.*?غنی‌سازی', r'برنامه.*?هسته‌ای', r'تأسیسات.*?هسته‌ای',
-            r'uranium.*?enrichment', r'nuclear.*?program', r'nuclear.*?facility',
-            
-            # Sanctions and economic warfare
-            r'تحریم.*?جدید', r'رفع.*?تحریم', r'فشار.*?اقتصادی',
-            r'new.*?sanctions', r'sanctions.*?relief', r'economic.*?pressure',
-            
-            # High-level announcements
-            r'نتانیاهو.*?اعلام', r'ایران.*?اعلام', r'آمریکا.*?اعلام',
-            r'netanyahu.*?announced', r'iran.*?announced', r'us.*?announced'
+        # Regional keywords (score: 3 each)
+        regional_matches = [kw for kw in cls.REGIONAL_KEYWORDS if kw in text_lower]
+        if regional_matches:
+            relevance_score += len(regional_matches) * 3
+            matching_topics.extend([f"REGION:{kw}" for kw in regional_matches[:2]])
+        
+        # Economic warfare keywords (score: 7 each)
+        econ_war_matches = [kw for kw in cls.ECONOMIC_WARFARE_KEYWORDS if kw in text_lower]
+        if econ_war_matches:
+            relevance_score += len(econ_war_matches) * 7
+            matching_topics.extend([f"ECON_WAR:{kw}" for kw in econ_war_matches[:2]])
+        
+        # Bonus for news structure patterns
+        if cls._has_news_structure(text):
+            relevance_score += 5
+            matching_topics.append("NEWS_STRUCTURE")
+        
+        # Bonus for multiple entities (Iran + USA, Israel + Gaza, etc.)
+        entity_bonus = cls._calculate_entity_bonus(text_lower)
+        relevance_score += entity_bonus
+        if entity_bonus > 0:
+            matching_topics.append(f"MULTI_ENTITY:{entity_bonus}")
+        
+        # Determine relevance with multiple thresholds
+        is_relevant = cls._determine_enhanced_relevance(
+            relevance_score, critical_matches, high_matches, text_lower
+        )
+        
+        # Clean up matching topics
+        matching_topics = list(dict.fromkeys(matching_topics))[:10]
+        
+        # Log for debugging
+        if relevance_score > 0:
+            logger.debug(f"Enhanced relevance: score={relevance_score}, "
+                        f"critical={len(critical_matches)}, high={len(high_matches)}, "
+                        f"is_relevant={is_relevant}")
+        
+        return is_relevant, relevance_score, matching_topics
+
+    @classmethod
+    def _has_news_structure(cls, text):
+        """Check if text has news-like structure."""
+        # Look for news patterns
+        news_patterns = [
+            r'گزارش\s+می‌دهد',  # reports
+            r'اعلام\s+کرد',      # announced
+            r'بیان\s+داشت',     # stated
+            r'گفت',             # said
+            r'مدعی\s+شد',       # claimed
+            r'تأیید\s+کرد',     # confirmed
+            r'منابع\s+خبری',    # news sources
+            r'خبرگزاری',        # news agency
+            r'آژانس',           # agency
+            r':[^:]+$',         # ends with colon (common in news)
         ]
         
-        high_priority_count = sum(1 for pattern in high_priority_patterns 
-                                if re.search(pattern, text_lower))
-        
-        # Boost score for high-priority patterns
-        if high_priority_count > 0:
-            relevance_score += high_priority_count * 4
-            logger.debug(f"High priority patterns detected: {high_priority_count}")
+        return any(re.search(pattern, text) for pattern in news_patterns)
 
-        # Apply configuration-based filtering
-        if WAR_NEWS_ONLY:
-            # Must contain war/conflict terminology
-            war_indicators = ["جنگ", "حمله", "موشک", "درگیری", "عملیات", 
-                            "war", "attack", "missile", "conflict", "operation"]
-            has_war_content = any(indicator in text_lower for indicator in war_indicators)
-            if not has_war_content:
-                logger.debug("Filtered out: no war content detected")
-                return False, relevance_score, primary_matches + secondary_matches
+    @classmethod
+    def _calculate_entity_bonus(cls, text_lower):
+        """Calculate bonus for multiple important entities mentioned."""
+        entities = {
+            'iran': any(kw in text_lower for kw in ['ایران', 'iran', 'iranian']),
+            'israel': any(kw in text_lower for kw in ['اسرائیل', 'israel', 'israeli']),
+            'usa': any(kw in text_lower for kw in ['آمریکا', 'امریکا', 'america', 'usa', 'washington']),
+            'trump': any(kw in text_lower for kw in ['ترامپ', 'trump']),
+            'gaza': any(kw in text_lower for kw in ['غزه', 'gaza', 'palestine']),
+            'war': any(kw in text_lower for kw in ['جنگ', 'حمله', 'war', 'attack', 'conflict']),
+            'nuclear': any(kw in text_lower for kw in ['هسته‌ای', 'اتمی', 'nuclear', 'atomic']),
+            'sanctions': any(kw in text_lower for kw in ['تحریم', 'sanctions', 'embargo'])
+        }
         
-        if ISRAEL_IRAN_FOCUS:
-            # Boost Israel-Iran content
-            israel_iran_indicators = ["اسرائیل", "ایران", "israel", "iran"]
-            has_israel_iran = any(indicator in text_lower for indicator in israel_iran_indicators)
-            if has_israel_iran:
-                relevance_score += 3
-                logger.debug("Boosted score for Israel-Iran content")
+        entity_count = sum(entities.values())
         
-        if GEOPOLITICAL_ONLY:
-            # Must have geopolitical relevance
-            geopolitical_indicators = [
-                "تحریم", "دیپلماسی", "مذاکرات", "توافق", "شورای امنیت",
-                "sanctions", "diplomacy", "negotiations", "agreement", "security council"
-            ]
-            has_geopolitical = any(indicator in text_lower for indicator in geopolitical_indicators)
-            if has_geopolitical:
-                relevance_score += 2
-        
-        # Decision logic with multiple thresholds
-        is_relevant = False
-        
-        # Automatic approval conditions
-        if relevance_score >= HIGH_PRIORITY_SCORE * 2:  # Very high score
-            is_relevant = True
-            logger.debug(f"Auto-approved: very high score ({relevance_score})")
-        elif high_priority_count >= 2:  # Multiple high-priority patterns
-            is_relevant = True
-            logger.debug(f"Auto-approved: multiple high-priority patterns ({high_priority_count})")
-        elif len(primary_matches) >= 3:  # Many primary topic matches
-            is_relevant = True
-            logger.debug(f"Auto-approved: many primary matches ({len(primary_matches)})")
-        
-        # Standard approval conditions
-        elif relevance_score >= HIGH_PRIORITY_SCORE:
-            is_relevant = True
-            logger.debug(f"Approved: high priority score ({relevance_score})")
-        elif len(primary_matches) >= 2 and relevance_score >= MIN_RELEVANCE_SCORE:
-            is_relevant = True
-            logger.debug(f"Approved: multiple primary matches with good score")
-        elif high_priority_count >= 1 and len(primary_matches) >= 1:
-            is_relevant = True
-            logger.debug(f"Approved: high-priority pattern with primary match")
-        
-        # Override for critical geopolitical events
-        critical_keywords = ["جنگ جهانی", "world war", "هسته‌ای", "nuclear war", "تحریم کامل"]
-        has_critical = any(keyword in text_lower for keyword in critical_keywords)
-        if has_critical and len(primary_matches) >= 1:
-            is_relevant = True
-            relevance_score += 5
-            logger.debug("Override: critical geopolitical event detected")
-        
-        # Final filtering - reject if too many irrelevant indicators
-        if len(irrelevant_matches) >= 3 and relevance_score < HIGH_PRIORITY_SCORE:
-            is_relevant = False
-            logger.debug("Rejected: too many irrelevant topics")
-        
-        all_matches = primary_matches + secondary_matches
-        
-        if is_relevant:
-            logger.info(f"✅ Relevant news detected (score: {relevance_score}): {all_matches[:3]}")
+        # Bonus scoring
+        if entity_count >= 4:
+            return 10  # Multiple major entities
+        elif entity_count >= 3:
+            return 7   # Several entities
+        elif entity_count >= 2:
+            return 5   # Two entities
         else:
-            logger.debug(f"❌ News filtered out (score: {relevance_score}): {text[:100]}...")
+            return 0
+
+    @classmethod
+    def _determine_enhanced_relevance(cls, score, critical_matches, high_matches, text_lower):
+        """Enhanced relevance determination with multiple criteria."""
         
-        return is_relevant, relevance_score, all_matches
+        # Always relevant if multiple critical keywords
+        if len(critical_matches) >= 2:
+            return True
+        
+        # Always relevant if single critical + high score
+        if critical_matches and score >= 15:
+            return True
+        
+        # High threshold for general content
+        if score >= 25:
+            return True
+        
+        # Medium threshold for news with structure
+        if score >= 15 and cls._has_news_structure(text_lower):
+            return True
+        
+        # Lower threshold for Iran-specific content
+        iran_content = any(kw in text_lower for kw in ['ایران', 'iran', 'iranian', 'tehran', 'تهران'])
+        if iran_content and score >= 10:
+            return True
+        
+        # War/conflict threshold
+        war_content = any(kw in text_lower for kw in ['جنگ', 'حمله', 'war', 'attack', 'conflict', 'threat'])
+        if war_content and score >= 12:
+            return True
+        
+        # Economic crisis threshold
+        crisis_content = any(kw in text_lower for kw in ['بحران', 'تحریم', 'crisis', 'sanctions', 'embargo'])
+        if crisis_content and score >= 10:
+            return True
+        
+        # Standard threshold
+        return score >= 20
+
+    @classmethod
+    def get_priority_level(cls, relevance_score):
+        """Get priority level based on enhanced scoring."""
+        if relevance_score >= 50:
+            return "CRITICAL"
+        elif relevance_score >= 30:
+            return "URGENT"
+        elif relevance_score >= 20:
+            return "HIGH"
+        elif relevance_score >= 10:
+            return "NORMAL"
+        else:
+            return "LOW"
+
+    @classmethod
+    def get_news_category(cls, text, matching_topics):
+        """Determine primary news category from enhanced analysis."""
+        text_lower = text.lower()
+        
+        # Analyze critical patterns
+        if any('CRITICAL:هسته‌ای' in topic or 'CRITICAL:nuclear' in topic for topic in matching_topics):
+            return "NUCLEAR_CRISIS"
+        elif any('CRITICAL:جنگ' in topic or 'CRITICAL:war' in topic for topic in matching_topics):
+            return "WAR_CONFLICT"
+        elif any('CRITICAL:ایران' in topic for topic in matching_topics):
+            return "IRAN_GEOPOLITICAL"
+        elif any('CRITICAL:اسرائیل' in topic or 'CRITICAL:israel' in topic for topic in matching_topics):
+            return "ISRAEL_OPERATIONS"
+        elif any('CRITICAL:طلا' in topic or 'CRITICAL:gold' in topic for topic in matching_topics):
+            return "GOLD_MARKETS"
+        elif any('CRITICAL:دلار' in topic or 'CRITICAL:dollar' in topic for topic in matching_topics):
+            return "CURRENCY_MARKETS"
+        elif any('ECON_WAR:' in topic for topic in matching_topics):
+            return "ECONOMIC_WARFARE"
+        else:
+            return "GEOPOLITICAL_ECONOMIC"
