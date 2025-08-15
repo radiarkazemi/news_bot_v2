@@ -1,6 +1,6 @@
 """
-Complete news handler with financial focus and approval workflow.
-Handles news detection, filtering, approval, and publishing.
+Complete news handler with financial focus, approval workflow, and inline keyboard buttons.
+Handles news detection, filtering, approval, and publishing with rate limiting.
 """
 import asyncio
 import hashlib
@@ -10,8 +10,9 @@ import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from collections import deque
 
-from telethon import events
+from telethon import events, Button
 from telethon.errors import FloodWaitError
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
@@ -27,6 +28,69 @@ from config.settings import (
 
 logger = logging.getLogger(__name__)
 
+class SimpleRateLimiter:
+    """Simple rate limiter to prevent flood waits."""
+    
+    def __init__(self, min_delay=8, max_queue_size=30):
+        self.min_delay = min_delay
+        self.max_queue_size = max_queue_size
+        self.last_send_time = 0
+        self.pending_queue = deque()
+        self.processing = False
+    
+    async def add_to_queue(self, send_func, *args, **kwargs):
+        """Add a send operation to the rate-limited queue."""
+        if len(self.pending_queue) >= self.max_queue_size:
+            logger.warning(f"🚫 Queue full ({self.max_queue_size}), dropping message")
+            return None
+        
+        self.pending_queue.append((send_func, args, kwargs))
+        logger.info(f"📥 Added to queue (size: {len(self.pending_queue)})")
+        
+        # Start processing if not already running
+        if not self.processing:
+            asyncio.create_task(self._process_queue())
+        
+        return "queued"
+    
+    async def _process_queue(self):
+        """Process queued send operations with rate limiting."""
+        if self.processing:
+            return
+        
+        self.processing = True
+        
+        try:
+            while self.pending_queue:
+                # Check if enough time has passed
+                time_since_last = time.time() - self.last_send_time
+                if time_since_last < self.min_delay:
+                    wait_time = self.min_delay - time_since_last
+                    logger.info(f"⏳ Rate limiting: waiting {wait_time:.1f}s")
+                    await asyncio.sleep(wait_time)
+                
+                # Get next item from queue
+                send_func, args, kwargs = self.pending_queue.popleft()
+                
+                try:
+                    # Attempt to send
+                    result = await send_func(*args, **kwargs)
+                    self.last_send_time = time.time()
+                    
+                    if result:
+                        logger.info("✅ Rate-limited send successful")
+                    else:
+                        logger.warning("⚠️ Rate-limited send failed")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error in rate-limited send: {e}")
+                
+                # Brief pause between sends
+                await asyncio.sleep(1)
+        
+        finally:
+            self.processing = False
+
 class NewsHandler:
     """Complete news handler for financial news detection and approval workflow."""
 
@@ -38,6 +102,15 @@ class NewsHandler:
         self.pending_news = {}
         self.processed_messages = set()
         self.admin_bot_entity = None
+        
+        # Add rate limiter
+        self.rate_limiter = SimpleRateLimiter(min_delay=8, max_queue_size=30)
+        self.approval_stats = {
+            'sent': 0,
+            'queued': 0,
+            'dropped': 0,
+            'errors': 0
+        }
         
         # Statistics
         self.stats = {
@@ -55,7 +128,7 @@ class NewsHandler:
         self.state_file = Path("data/state/news_handler_state.json")
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         
-        logger.info("📰 News handler initialized with financial focus")
+        logger.info("📰 News handler initialized with financial focus and rate limiting")
 
     async def initialize(self):
         """Initialize the news handler with Bot API."""
@@ -66,88 +139,134 @@ class NewsHandler:
             logger.error(f"❌ Failed to initialize Bot API: {e}")
 
     async def setup_approval_handler(self):
-        """Set up the approval command handler."""
+        """Set up the approval command handler with inline keyboard support."""
         try:
             client = self.client_manager.client
             
+            # Handle text commands (backward compatibility)
             @client.on(events.NewMessage(pattern=r'/submit(\w+)'))
             async def handle_approval_command(event):
                 """Handle approval commands from admin bot."""
                 try:
-                    # Extract approval ID
                     approval_id = event.pattern_match.group(1)
-                    logger.info(f"📥 Received approval command for: {approval_id}")
-                    
-                    # Check if we have this pending news
-                    if approval_id not in self.pending_news:
-                        await event.reply(f"❌ News item {approval_id} not found or already processed")
-                        logger.warning(f"Approval ID {approval_id} not found in pending news")
-                        return
-                    
-                    # Get news data
-                    news_data = self.pending_news[approval_id]
-                    logger.info(f"📋 Processing approval for news: {news_data['text'][:100]}...")
-                    
-                    # Publish the news
-                    success = await self.publish_approved_news(news_data)
-                    
-                    if success:
-                        # Success response
-                        await event.reply(f"✅ News {approval_id} published successfully to channel!")
-                        logger.info(f"✅ Successfully published approved news: {approval_id}")
-                        
-                        # Update statistics
-                        self.stats['news_approved'] += 1
-                        self.stats['news_published'] += 1
-                        
-                        # Remove from pending
-                        del self.pending_news[approval_id]
-                        await self.save_pending_news()
-                        
-                    else:
-                        # Failure response
-                        await event.reply(f"❌ Failed to publish news {approval_id}. Please try again or contact support.")
-                        logger.error(f"❌ Failed to publish approved news: {approval_id}")
-                        
+                    await self._process_approval(approval_id, event)
                 except Exception as e:
-                    logger.error(f"❌ Error handling approval command for {approval_id}: {e}")
-                    try:
-                        await event.reply("❌ Error processing approval. Please contact support.")
-                    except:
-                        pass
+                    logger.error(f"❌ Error handling approval command: {e}")
             
-            # Also handle rejection commands (optional)
             @client.on(events.NewMessage(pattern=r'/reject(\w+)'))
             async def handle_rejection_command(event):
                 """Handle rejection commands from admin bot."""
                 try:
                     approval_id = event.pattern_match.group(1)
-                    logger.info(f"🚫 Received rejection command for: {approval_id}")
+                    await self._process_rejection(approval_id, event)
+                except Exception as e:
+                    logger.error(f"❌ Error handling rejection command: {e}")
+            
+            # Handle inline keyboard callbacks
+            @client.on(events.CallbackQuery)
+            async def handle_callback_query(event):
+                """Handle inline keyboard button clicks."""
+                try:
+                    data = event.data.decode('utf-8')
                     
-                    if approval_id in self.pending_news:
-                        # Remove from pending
-                        news_data = self.pending_news[approval_id]
-                        del self.pending_news[approval_id]
-                        await self.save_pending_news()
-                        
-                        await event.reply(f"🚫 News {approval_id} rejected and removed from queue")
-                        logger.info(f"🚫 News {approval_id} rejected and removed")
-                    else:
-                        await event.reply(f"❌ News item {approval_id} not found")
+                    if data.startswith('approve_'):
+                        approval_id = data.replace('approve_', '')
+                        await self._process_approval(approval_id, event)
+                    elif data.startswith('reject_'):
+                        approval_id = data.replace('reject_', '')
+                        await self._process_rejection(approval_id, event)
+                    elif data.startswith('copy_'):
+                        approval_id = data.replace('copy_', '')
+                        await event.answer(f"ID copied: {approval_id}", alert=True)
                         
                 except Exception as e:
-                    logger.error(f"Error handling rejection command: {e}")
-                    try:
-                        await event.reply("❌ Error processing rejection")
-                    except:
-                        pass
+                    logger.error(f"❌ Error handling callback query: {e}")
             
-            logger.info("✅ News approval handler set up successfully")
+            logger.info("✅ News approval handler set up successfully with inline keyboards")
             return True
             
         except Exception as e:
             logger.error(f"❌ Failed to set up approval handler: {e}")
             return False
+
+    async def _process_approval(self, approval_id, event):
+        """Process approval request."""
+        logger.info(f"📥 Received approval for: {approval_id}")
+        
+        # Check if we have this pending news
+        if approval_id not in self.pending_news:
+            await event.respond(f"❌ News item {approval_id} not found or already processed")
+            logger.warning(f"Approval ID {approval_id} not found in pending news")
+            return
+        
+        # Get news data
+        news_data = self.pending_news[approval_id]
+        logger.info(f"📋 Processing approval for news: {news_data['text'][:100]}...")
+        
+        # Publish the news
+        success = await self.publish_approved_news(news_data)
+        
+        if success:
+            # Success response
+            response_text = f"✅ News {approval_id} published successfully to channel!"
+            
+            # Edit message to show approval status
+            if hasattr(event, 'edit'):
+                try:
+                    await event.edit(f"✅ **APPROVED & PUBLISHED**\n\n{response_text}")
+                except:
+                    await event.respond(response_text)
+            else:
+                await event.respond(response_text)
+            
+            logger.info(f"✅ Successfully published approved news: {approval_id}")
+            
+            # Update statistics
+            self.stats['news_approved'] += 1
+            self.stats['news_published'] += 1
+            
+            # Remove from pending
+            del self.pending_news[approval_id]
+            await self.save_pending_news()
+            
+        else:
+            # Failure response
+            error_text = f"❌ Failed to publish news {approval_id}. Please try again or contact support."
+            
+            if hasattr(event, 'edit'):
+                try:
+                    await event.edit(f"❌ **PUBLISHING FAILED**\n\n{error_text}")
+                except:
+                    await event.respond(error_text)
+            else:
+                await event.respond(error_text)
+            
+            logger.error(f"❌ Failed to publish approved news: {approval_id}")
+
+    async def _process_rejection(self, approval_id, event):
+        """Process rejection request."""
+        logger.info(f"🚫 Received rejection for: {approval_id}")
+        
+        if approval_id in self.pending_news:
+            # Remove from pending
+            news_data = self.pending_news[approval_id]
+            del self.pending_news[approval_id]
+            await self.save_pending_news()
+            
+            response_text = f"🚫 News {approval_id} rejected and removed from queue"
+            
+            # Edit message to show rejection status
+            if hasattr(event, 'edit'):
+                try:
+                    await event.edit(f"🚫 **REJECTED**\n\n{response_text}")
+                except:
+                    await event.respond(response_text)
+            else:
+                await event.respond(response_text)
+            
+            logger.info(f"🚫 News {approval_id} rejected and removed")
+        else:
+            await event.respond(f"❌ News item {approval_id} not found")
 
     async def publish_approved_news(self, news_data):
         """Publish approved news to the target channel."""
@@ -178,7 +297,7 @@ class NewsHandler:
                 current_time = get_formatted_time()
                 formatted_text = f"{formatted_text}\n🕐 {current_time}"
             
-            # Publish to target channel - FIX: Properly await the async method
+            # Publish to target channel
             logger.info(f"📤 Attempting to publish to channel {TARGET_CHANNEL_ID}")
             
             # Create async context and properly await the send_message
@@ -214,8 +333,7 @@ class NewsHandler:
             
             channel_entity = await self.client_manager.client.get_entity(channel_username)
             
-            # Get recent messages (last 3 hours)
-            # CORRECT - uses setting:
+            # Get recent messages (last 6 hours - reduced from 12)
             from config.settings import MESSAGE_LOOKBACK_HOURS
             cutoff_time = datetime.now() - timedelta(hours=MESSAGE_LOOKBACK_HOURS)
             
@@ -225,7 +343,7 @@ class NewsHandler:
             
             logger.info(f"📥 Retrieving recent messages from {channel_username}")
             
-            # CORRECT - uses setting:
+            # CORRECT - uses setting (reduced from 50 to 30):
             from config.settings import MAX_MESSAGES_PER_CHECK
             async for message in self.client_manager.client.iter_messages(channel_entity, limit=MAX_MESSAGES_PER_CHECK):
                 try:
@@ -304,8 +422,8 @@ class NewsHandler:
                         if i == 0 and message.media:
                             media = self._extract_media_info(message, channel_username)
                         
-                        # Send for approval
-                        approval_id = await self.send_to_approval_bot(
+                        # Send for approval with rate limiting
+                        approval_id = await self.send_to_approval_bot_rate_limited(
                             cleaned_text, 
                             media, 
                             channel_username.replace('@', ''),
@@ -373,21 +491,69 @@ class NewsHandler:
         
         return None
 
-    async def send_to_approval_bot(self, news_text, media=None, source_channel=None, analysis=None):
-        """Send financial news to admin bot for approval."""
+    async def send_to_approval_bot_rate_limited(self, news_text, media=None, source_channel=None, analysis=None):
+        """Rate-limited version of send_to_approval_bot."""
         try:
-            # Generate unique approval ID
+            # Check priority - only queue if important enough
+            if analysis:
+                score = analysis.get('score', 0)
+                priority = analysis.get('priority', 'NORMAL')
+                
+                # Skip low priority during high activity
+                if score < 5 and len(self.rate_limiter.pending_queue) > 10:
+                    logger.info(f"🚫 Skipping low priority news (score: {score}, queue: {len(self.rate_limiter.pending_queue)})")
+                    self.approval_stats['dropped'] += 1
+                    return None
+            
+            # Generate approval ID
             content_hash = hashlib.md5(news_text.encode()).hexdigest()[:6]
             timestamp_id = str(int(time.time() * 1000))[-6:]
             approval_id = f"{timestamp_id}{content_hash}"
             
+            # Add to rate-limited queue
+            result = await self.rate_limiter.add_to_queue(
+                self._send_approval_message,
+                news_text, media, source_channel, analysis, approval_id
+            )
+            
+            if result == "queued":
+                self.approval_stats['queued'] += 1
+                
+                # Store pending news
+                self.pending_news[approval_id] = {
+                    'text': news_text,
+                    'formatted_text': news_text,
+                    'original_text': news_text,
+                    'timestamp': time.time(),
+                    'source_channel': source_channel,
+                    'has_media': media is not None,
+                    'media': media,
+                    'analysis': analysis,
+                    'approval_source': 'telegram',
+                    'status': 'queued'
+                }
+                
+                await self.save_pending_news()
+                return approval_id
+            else:
+                self.approval_stats['dropped'] += 1
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error in rate-limited approval: {e}")
+            self.approval_stats['errors'] += 1
+            return None
+
+    async def _send_approval_message(self, news_text, media, source_channel, analysis, approval_id):
+        """Internal method to send approval message with inline keyboard."""
+        try:
             # Get admin bot entity
             admin_bot_entity = await self.get_admin_bot_entity()
             if not admin_bot_entity:
                 logger.error("❌ Could not get admin bot entity")
-                return None
+                return False
             
-            # Format analysis info
+            # Format approval message
             analysis_info = ""
             if analysis:
                 category = analysis.get('category', 'UNKNOWN')
@@ -400,7 +566,6 @@ class NewsHandler:
                                f"📊 Score: {score}\n"
                                f"🏷️ Topics: {', '.join(topics[:3])}\n")
             
-            # Format approval message
             current_time = get_formatted_time()
             approval_message = (
                 f"📈 <b>FINANCIAL NEWS PENDING APPROVAL</b>\n\n"
@@ -410,46 +575,39 @@ class NewsHandler:
                 f"{analysis_info}"
                 f"{'📎 Has Media' if media else '📝 Text Only'}\n\n"
                 f"<b>Content:</b>\n"
-                f"{news_text}\n\n"
-                f"➡️ <b>To approve:</b> <code>/submit{approval_id}</code>\n"
-                f"➡️ <b>To reject:</b> <code>/reject{approval_id}</code>"
+                f"{news_text}"
             )
             
-            # Send to admin bot
+            # Create inline keyboard with beautiful buttons
+            keyboard = [
+                [
+                    Button.inline("✅ APPROVE", f"approve_{approval_id}"),
+                    Button.inline("🚫 REJECT", f"reject_{approval_id}")
+                ],
+                [
+                    Button.inline("📋 Copy ID", f"copy_{approval_id}")
+                ]
+            ]
+            
+            # Send message with inline keyboard
             message = await self.client_manager.client.send_message(
                 admin_bot_entity,
                 approval_message,
-                parse_mode='html'
+                parse_mode='html',
+                buttons=keyboard
             )
             
             if message:
-                # Store pending news
-                self.pending_news[approval_id] = {
-                    'text': news_text,
-                    'formatted_text': news_text,
-                    'original_text': news_text,
-                    'message_id': message.id,
-                    'timestamp': time.time(),
-                    'source_channel': source_channel,
-                    'has_media': media is not None,
-                    'media': media,
-                    'analysis': analysis,
-                    'approval_source': 'telegram',
-                    'status': 'pending'
-                }
-                
-                # Save state
-                await self.save_pending_news()
-                
-                logger.info(f"📤 Financial news sent for approval: {approval_id}")
-                return approval_id
+                self.approval_stats['sent'] += 1
+                logger.info(f"📤 Rate-limited approval sent with inline buttons: {approval_id}")
+                return True
             else:
-                logger.error("❌ Failed to send message to admin bot")
-                return None
+                logger.error("❌ Failed to send approval message")
+                return False
                 
         except Exception as e:
-            logger.error(f"❌ Error sending to approval bot: {e}")
-            return None
+            logger.error(f"❌ Error sending approval message: {e}")
+            return False
 
     async def get_admin_bot_entity(self):
         """Get the admin bot entity with caching."""
@@ -541,6 +699,33 @@ class NewsHandler:
         except Exception as e:
             logger.error(f"❌ Error cleaning expired pending news: {e}")
 
+    def get_approval_stats(self):
+        """Get approval processing statistics."""
+        queue_size = len(self.rate_limiter.pending_queue)
+        processing = self.rate_limiter.processing
+        
+        return {
+            **self.approval_stats,
+            'queue_size': queue_size,
+            'processing': processing,
+            'last_send_time': self.rate_limiter.last_send_time,
+            'queue_full': queue_size >= self.rate_limiter.max_queue_size
+        }
+
+    def log_approval_stats(self):
+        """Log approval statistics."""
+        stats = self.get_approval_stats()
+        
+        logger.info("📊 APPROVAL STATISTICS")
+        logger.info("=" * 40)
+        logger.info(f"📤 Sent: {stats['sent']}")
+        logger.info(f"📥 Queued: {stats['queued']}")
+        logger.info(f"🚫 Dropped: {stats['dropped']}")
+        logger.info(f"❌ Errors: {stats['errors']}")
+        logger.info(f"📋 Current Queue: {stats['queue_size']}")
+        logger.info(f"🔄 Processing: {'Yes' if stats['processing'] else 'No'}")
+        logger.info("=" * 40)
+
     def get_statistics(self):
         """Get comprehensive statistics."""
         uptime = time.time() - self.stats.get('session_start', time.time())
@@ -586,7 +771,7 @@ class NewsHandler:
                         if is_relevant:
                             # Process without duplicate checking
                             cleaned = self.news_detector.clean_news_text(message.text)
-                            approval_id = await self.send_to_approval_bot(
+                            approval_id = await self.send_to_approval_bot_rate_limited(
                                 cleaned, 
                                 None, 
                                 channel_username.replace('@', ''),

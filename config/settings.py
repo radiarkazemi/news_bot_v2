@@ -1,6 +1,6 @@
 """
 Complete application settings for the Financial News Detector.
-Enhanced for financial news detection with proper defaults.
+Enhanced for financial news detection with proper defaults and rate limiting.
 """
 import os
 import pytz
@@ -33,7 +33,7 @@ for directory in [DATA_DIR, STATE_DIR, LOGS_DIR, SESSION_DIR]:
 # ============================================================================
 
 # Target channel for approved news
-TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "-1002481901026"))
+TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID", "-1002760442869"))
 
 # News source channels
 NEWS_CHANNEL = os.getenv("NEWS_CHANNEL", "goldonline2016").replace('@', '')
@@ -67,15 +67,15 @@ OPERATION_END_HOUR = int(os.getenv("OPERATION_END_HOUR", "22"))
 # Force 24-hour operation
 FORCE_24_HOUR_OPERATION = os.getenv("FORCE_24_HOUR_OPERATION", "false").lower() == "true"
 
-# Check intervals (in seconds)
-NEWS_CHECK_INTERVAL = int(os.getenv("NEWS_CHECK_INTERVAL", "900"))  # 15 minutes (was 30)
+# Check intervals (in seconds) - OPTIMIZED
+NEWS_CHECK_INTERVAL = int(os.getenv("NEWS_CHECK_INTERVAL", "900"))  # 15 minutes
 HEALTH_CHECK_INTERVAL = int(os.getenv("HEALTH_CHECK_INTERVAL", "300"))  # 5 minutes
 CONNECTION_RETRY_INTERVAL = int(os.getenv("CONNECTION_RETRY_INTERVAL", "30"))  # 30 seconds
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "60"))  # 1 minute
 
-# Processing delays (in seconds)
-CHANNEL_PROCESSING_DELAY = int(os.getenv("CHANNEL_PROCESSING_DELAY", "2"))
-APPROVAL_BOT_DELAY = int(os.getenv("APPROVAL_BOT_DELAY", "1"))
+# Processing delays (in seconds) - INCREASED FOR RATE LIMITING
+CHANNEL_PROCESSING_DELAY = int(os.getenv("CHANNEL_PROCESSING_DELAY", "5"))  # Increased from 2
+APPROVAL_BOT_DELAY = int(os.getenv("APPROVAL_BOT_DELAY", "8"))  # New setting
 
 # Check frequency when outside operating hours
 CHECK_OUTSIDE_HOURS = 15 * 60  # 15 minutes
@@ -97,16 +97,16 @@ ECONOMIC_WAR_IMPACT = os.getenv("ECONOMIC_WAR_IMPACT", "true").lower() == "true"
 IRAN_SANCTIONS_FOCUS = os.getenv("IRAN_SANCTIONS_FOCUS", "true").lower() == "true"
 GEOPOLITICAL_ECONOMY = os.getenv("GEOPOLITICAL_ECONOMY", "true").lower() == "true"
 
-# WAR NEWS SETTINGS - CHANGED DEFAULTS FOR FINANCIAL FOCUS
-WAR_NEWS_ONLY = os.getenv("WAR_NEWS_ONLY", "false").lower() == "true"  # CHANGED DEFAULT
-ISRAEL_IRAN_FOCUS = os.getenv("ISRAEL_IRAN_FOCUS", "false").lower() == "true"  # CHANGED DEFAULT
-GEOPOLITICAL_ONLY = os.getenv("GEOPOLITICAL_ONLY", "false").lower() == "true"  # CHANGED DEFAULT
+# WAR NEWS SETTINGS - DISABLED FOR FINANCIAL FOCUS
+WAR_NEWS_ONLY = os.getenv("WAR_NEWS_ONLY", "false").lower() == "true"
+ISRAEL_IRAN_FOCUS = os.getenv("ISRAEL_IRAN_FOCUS", "false").lower() == "true"
+GEOPOLITICAL_ONLY = os.getenv("GEOPOLITICAL_ONLY", "false").lower() == "true"
 
-# Relevance scoring thresholds - LOWERED DEFAULTS
-MIN_FINANCIAL_SCORE = int(os.getenv("MIN_FINANCIAL_SCORE", "1"))  # LOWERED from 2
-HIGH_PRIORITY_FINANCIAL_SCORE = int(os.getenv("HIGH_PRIORITY_FINANCIAL_SCORE", "3"))  # LOWERED from 5
-URGENT_FINANCIAL_SCORE = int(os.getenv("URGENT_FINANCIAL_SCORE", "5"))  # LOWERED from 8
-CRITICAL_FINANCIAL_SCORE = int(os.getenv("CRITICAL_FINANCIAL_SCORE", "8"))  # LOWERED from 15
+# Relevance scoring thresholds - OPTIMIZED FOR LESS VOLUME
+MIN_FINANCIAL_SCORE = int(os.getenv("MIN_FINANCIAL_SCORE", "3"))  # INCREASED from 1
+HIGH_PRIORITY_FINANCIAL_SCORE = int(os.getenv("HIGH_PRIORITY_FINANCIAL_SCORE", "6"))  # INCREASED from 3
+URGENT_FINANCIAL_SCORE = int(os.getenv("URGENT_FINANCIAL_SCORE", "10"))  # INCREASED from 5
+CRITICAL_FINANCIAL_SCORE = int(os.getenv("CRITICAL_FINANCIAL_SCORE", "15"))  # INCREASED from 8
 
 # Financial categories to monitor
 MONITOR_GOLD = os.getenv("MONITOR_GOLD", "true").lower() == "true"
@@ -117,20 +117,20 @@ MONITOR_IRANIAN_ECONOMY = os.getenv("MONITOR_IRANIAN_ECONOMY", "true").lower() =
 MONITOR_STOCK_MARKETS = os.getenv("MONITOR_STOCK_MARKETS", "true").lower() == "true"
 
 # ============================================================================
-# NEWS DETECTION CONFIGURATION
+# NEWS DETECTION CONFIGURATION - OPTIMIZED
 # ============================================================================
 
 # Text processing limits
 MIN_NEWS_LENGTH = int(os.getenv("MIN_NEWS_LENGTH", "30"))
 MAX_NEWS_LENGTH = int(os.getenv("MAX_NEWS_LENGTH", "4000"))
-NEWS_SEGMENT_MIN_LENGTH = int(os.getenv("NEWS_SEGMENT_MIN_LENGTH", "20"))  # LOWERED from 50
+NEWS_SEGMENT_MIN_LENGTH = int(os.getenv("NEWS_SEGMENT_MIN_LENGTH", "50"))  # INCREASED from 20
 
 # Duplicate detection
 DUPLICATE_CHECK_WINDOW_HOURS = int(os.getenv("DUPLICATE_CHECK_WINDOW_HOURS", "24"))
 
-# Message processing limits - ENHANCED FOR FINANCIAL
-MAX_MESSAGES_PER_CHECK = int(os.getenv("MAX_MESSAGES_PER_CHECK", "50"))  # INCREASED from 30
-MESSAGE_LOOKBACK_HOURS = int(os.getenv("MESSAGE_LOOKBACK_HOURS", "12"))  # INCREASED from 3
+# Message processing limits - REDUCED FOR VOLUME CONTROL
+MAX_MESSAGES_PER_CHECK = int(os.getenv("MAX_MESSAGES_PER_CHECK", "30"))  # REDUCED from 50
+MESSAGE_LOOKBACK_HOURS = int(os.getenv("MESSAGE_LOOKBACK_HOURS", "6"))   # REDUCED from 12
 
 # ============================================================================
 # APPROVAL SYSTEM CONFIGURATION
@@ -151,6 +151,30 @@ APPROVAL_CONFIRMATION_REQUIRED = os.getenv("APPROVAL_CONFIRMATION_REQUIRED", "tr
 REJECTION_TRACKING = os.getenv("REJECTION_TRACKING", "true").lower() == "true"
 
 # ============================================================================
+# RATE LIMITING CONFIGURATION - NEW SECTION
+# ============================================================================
+
+# Rate limiting settings - NEW
+MAX_APPROVALS_PER_HOUR = int(os.getenv("MAX_APPROVALS_PER_HOUR", "30"))
+MAX_CONCURRENT_APPROVALS = int(os.getenv("MAX_CONCURRENT_APPROVALS", "1"))
+MIN_APPROVAL_DELAY = int(os.getenv("MIN_APPROVAL_DELAY", "8"))  # seconds
+
+# Queue management - NEW
+MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "30"))
+QUEUE_CLEANUP_INTERVAL = int(os.getenv("QUEUE_CLEANUP_INTERVAL", "300"))  # 5 minutes
+
+# Priority filtering - NEW
+PRIORITY_FILTERING_ENABLED = os.getenv("PRIORITY_FILTERING_ENABLED", "true").lower() == "true"
+MIN_PRIORITY_DURING_PEAK = os.getenv("MIN_PRIORITY_DURING_PEAK", "HIGH")
+PEAK_HOURS_START = int(os.getenv("PEAK_HOURS_START", "9"))
+PEAK_HOURS_END = int(os.getenv("PEAK_HOURS_END", "18"))
+
+# Retry settings - NEW
+MAX_RETRY_ATTEMPTS = int(os.getenv("MAX_RETRY_ATTEMPTS", "3"))
+RETRY_DELAY_MULTIPLIER = int(os.getenv("RETRY_DELAY_MULTIPLIER", "2"))
+INITIAL_RETRY_DELAY = int(os.getenv("INITIAL_RETRY_DELAY", "30"))
+
+# ============================================================================
 # MEDIA HANDLING CONFIGURATION
 # ============================================================================
 
@@ -164,12 +188,8 @@ SUPPORTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 SUPPORTED_DOCUMENT_TYPES = ['application/pdf']
 
 # ============================================================================
-# RATE LIMITING CONFIGURATION
+# TECHNICAL SETTINGS
 # ============================================================================
-
-# Rate limiting settings
-MAX_MESSAGES_PER_MINUTE = int(os.getenv("MAX_MESSAGES_PER_MINUTE", "10"))
-MAX_APPROVALS_PER_HOUR = int(os.getenv("MAX_APPROVALS_PER_HOUR", "50"))
 
 # API call limits
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
@@ -178,6 +198,10 @@ API_TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
 
 # Flood wait handling
 FLOOD_WAIT_MAX_DELAY = int(os.getenv("FLOOD_WAIT_MAX_DELAY", "300"))  # 5 minutes max
+
+# Session management
+SESSION_FILE_PATH = os.getenv("SESSION_FILE_PATH", str(SESSION_DIR / "telegram_session"))
+SESSION_FILE = Path(SESSION_FILE_PATH)
 
 # ============================================================================
 # LOGGING CONFIGURATION
@@ -206,9 +230,6 @@ LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 STATE_FILE_PATH = os.getenv("STATE_FILE_PATH", str(STATE_DIR / "news_detector_state.json"))
 PENDING_NEWS_BACKUP_INTERVAL = int(os.getenv("PENDING_NEWS_BACKUP_INTERVAL", "300"))  # 5 minutes
 
-# Session management
-SESSION_FILE_PATH = os.getenv("SESSION_FILE_PATH", str(SESSION_DIR / "telegram_session"))
-
 # Cache management
 PROCESSED_MESSAGES_CACHE_SIZE = int(os.getenv("PROCESSED_MESSAGES_CACHE_SIZE", "10000"))
 ADMIN_BOT_CACHE_TIMEOUT = int(os.getenv("ADMIN_BOT_CACHE_TIMEOUT", "3600"))  # 1 hour
@@ -217,15 +238,34 @@ ADMIN_BOT_CACHE_TIMEOUT = int(os.getenv("ADMIN_BOT_CACHE_TIMEOUT", "3600"))  # 1
 # FINANCIAL RELEVANCE SCORING (ENHANCED)
 # ============================================================================
 
-# LOWERED relevance thresholds for financial content
-MIN_RELEVANCE_SCORE = int(os.getenv("MIN_RELEVANCE_SCORE", "1"))  # LOWERED from 3
-HIGH_PRIORITY_SCORE = int(os.getenv("HIGH_PRIORITY_SCORE", "3"))  # LOWERED from 5
-URGENT_NEWS_SCORE = int(os.getenv("URGENT_NEWS_SCORE", "5"))  # LOWERED from 8
+# OPTIMIZED relevance thresholds for financial content
+MIN_RELEVANCE_SCORE = int(os.getenv("MIN_RELEVANCE_SCORE", "3"))  # INCREASED from 1
+HIGH_PRIORITY_SCORE = int(os.getenv("HIGH_PRIORITY_SCORE", "6"))  # INCREASED from 3
+URGENT_NEWS_SCORE = int(os.getenv("URGENT_NEWS_SCORE", "10"))     # INCREASED from 5
 
 # Financial keyword weights
 GOLD_KEYWORD_WEIGHT = int(os.getenv("GOLD_KEYWORD_WEIGHT", "3"))
 CURRENCY_KEYWORD_WEIGHT = int(os.getenv("CURRENCY_KEYWORD_WEIGHT", "3"))
 ECONOMY_KEYWORD_WEIGHT = int(os.getenv("ECONOMY_KEYWORD_WEIGHT", "2"))
+
+# ============================================================================
+# MONITORING CONFIGURATION - NEW SECTION
+# ============================================================================
+
+# Rate limit monitoring
+MONITOR_RATE_LIMITS = os.getenv("MONITOR_RATE_LIMITS", "true").lower() == "true"
+RATE_LIMIT_WARNING_THRESHOLD = int(os.getenv("RATE_LIMIT_WARNING_THRESHOLD", "200"))  # seconds
+RATE_LIMIT_ALERT_THRESHOLD = int(os.getenv("RATE_LIMIT_ALERT_THRESHOLD", "600"))    # 10 minutes
+
+# Queue monitoring
+MONITOR_QUEUE_SIZE = os.getenv("MONITOR_QUEUE_SIZE", "true").lower() == "true"
+QUEUE_SIZE_WARNING_THRESHOLD = int(os.getenv("QUEUE_SIZE_WARNING_THRESHOLD", "20"))
+QUEUE_SIZE_ALERT_THRESHOLD = int(os.getenv("QUEUE_SIZE_ALERT_THRESHOLD", "25"))
+
+# Performance monitoring
+ENABLE_PERFORMANCE_LOGGING = os.getenv("ENABLE_PERFORMANCE_LOGGING", "true").lower() == "true"
+LOG_PROCESSING_TIMES = os.getenv("LOG_PROCESSING_TIMES", "true").lower() == "true"
+SLOW_PROCESSING_THRESHOLD = int(os.getenv("SLOW_PROCESSING_THRESHOLD", "30"))  # seconds
 
 # ============================================================================
 # PROXY CONFIGURATION (Optional)
@@ -290,9 +330,12 @@ def validate_settings():
     if MIN_FINANCIAL_SCORE < 1:
         warnings.append("MIN_FINANCIAL_SCORE is very low")
     
-    # Check financial settings
-    if WAR_NEWS_ONLY and not (GOLD_NEWS_PRIORITY or CURRENCY_NEWS_PRIORITY):
-        warnings.append("WAR_NEWS_ONLY is enabled but financial categories are disabled - may miss financial news")
+    # Check rate limiting settings
+    if MIN_APPROVAL_DELAY < 5:
+        warnings.append("MIN_APPROVAL_DELAY is very low (< 5 seconds) - may cause rate limits")
+    
+    if MAX_QUEUE_SIZE > 50:
+        warnings.append("MAX_QUEUE_SIZE is very high (> 50) - may cause memory issues")
     
     return warnings, errors
 
@@ -315,6 +358,7 @@ def get_settings_summary():
         "24h_mode": FORCE_24_HOUR_OPERATION,
         "check_interval": NEWS_CHECK_INTERVAL,
         "message_lookback_hours": MESSAGE_LOOKBACK_HOURS,
+        "max_messages_per_check": MAX_MESSAGES_PER_CHECK,
         "financial_focus": {
             "gold": MONITOR_GOLD,
             "currency": MONITOR_CURRENCIES,
@@ -327,7 +371,12 @@ def get_settings_summary():
         "geopolitical_only": GEOPOLITICAL_ONLY,
         "approval_system": ENABLE_ADMIN_APPROVAL,
         "min_financial_score": MIN_FINANCIAL_SCORE,
-        "min_relevance_score": MIN_RELEVANCE_SCORE
+        "min_relevance_score": MIN_RELEVANCE_SCORE,
+        "rate_limiting": {
+            "min_delay": MIN_APPROVAL_DELAY,
+            "max_queue": MAX_QUEUE_SIZE,
+            "max_per_hour": MAX_APPROVALS_PER_HOUR
+        }
     }
 
 # ============================================================================
@@ -377,5 +426,7 @@ __all__ = [
     'ALL_NEWS_CHANNELS', 'get_active_news_channels', 'get_settings_summary',
     'TEHRAN_TZ', 'DEBUG_MODE', 'LOG_LEVEL', 'CHANNEL_PROCESSING_DELAY',
     'MESSAGE_LOOKBACK_HOURS', 'MAX_MESSAGES_PER_CHECK', 'MIN_RELEVANCE_SCORE',
-    'GOLD_NEWS_PRIORITY', 'CURRENCY_NEWS_PRIORITY', 'IRANIAN_ECONOMY_FOCUS'
+    'GOLD_NEWS_PRIORITY', 'CURRENCY_NEWS_PRIORITY', 'IRANIAN_ECONOMY_FOCUS',
+    'MAX_RETRIES', 'RETRY_DELAY_BASE', 'API_TIMEOUT', 'SESSION_FILE', 'SESSION_FILE_PATH',
+    'MIN_APPROVAL_DELAY', 'MAX_QUEUE_SIZE', 'MAX_APPROVALS_PER_HOUR'
 ]
