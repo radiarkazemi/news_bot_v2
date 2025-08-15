@@ -1,5 +1,6 @@
 """
-Expanded news filter for financial and geopolitical content.
+Enhanced news filter for financial and geopolitical content.
+Optimized for Iranian financial news with lower thresholds.
 """
 import logging
 import re
@@ -7,58 +8,60 @@ import re
 logger = logging.getLogger(__name__)
 
 class NewsFilter:
-    """Expanded filter for financial and geopolitical news with market impact."""
+    """Enhanced filter for financial and geopolitical news with market impact."""
     
-    # CRITICAL KEYWORDS (Highest Priority)
-    CRITICAL_KEYWORDS = [
-        # Persian critical
-        "ایران", "اسرائیل", "ترامپ", "بایدن", "جنگ", "حمله", "تهدید", "هسته‌ای",
-        "تحریم", "طلا", "دلار", "یورو", "نفت", "بحران", "اقتصاد",
+    # CRITICAL FINANCIAL KEYWORDS (Highest Priority)
+    CRITICAL_FINANCIAL_KEYWORDS = [
+        # Persian critical financial
+        "طلا", "سکه", "دلار", "یورو", "ارز", "نرخ", "قیمت", "بازار",
+        "افزایش", "کاهش", "رشد", "سقوط", "جهش", "ثبت",
+        "بانک‌مرکزی", "تورم", "اقتصاد", "بورس", "سهام",
         
-        # English critical  
-        "iran", "israel", "trump", "biden", "war", "attack", "threat", "nuclear",
-        "sanctions", "gold", "dollar", "euro", "oil", "crisis", "economy"
+        # English critical financial  
+        "gold", "dollar", "euro", "currency", "rate", "price", "market",
+        "economy", "economic", "inflation", "bank", "stock"
     ]
     
     # HIGH PRIORITY KEYWORDS
     HIGH_PRIORITY_KEYWORDS = [
         # Persian high priority
-        "آمریکا", "واشنگتن", "تل‌آویو", "تهران", "سپاه", "حزب‌الله", "حماس", "غزه",
-        "موشک", "پهپاد", "بمباران", "عملیات", "نظامی", "ارتش", "بازار", "بورس",
-        "نرخ", "قیمت", "ارز", "صرافی", "بانک‌مرکزی", "تورم", "صادرات", "واردات",
+        "ایران", "ایرانی", "تهران", "کشور", "ملی", "دولت",
+        "صرافی", "صرافی‌ها", "تجارت", "صادرات", "واردات",
+        "نفت", "گاز", "انرژی", "پتروشیمی", "صنعت", "تولید",
+        "سرمایه", "سرمایه‌گذاری", "مالی", "بودجه",
         
         # English high priority
-        "america", "washington", "telaviv", "tehran", "irgc", "hezbollah", "hamas", "gaza",
-        "missile", "drone", "bombing", "operation", "military", "army", "market", "stock",
-        "rate", "price", "currency", "exchange", "central", "bank", "inflation", "export"
+        "iran", "iranian", "tehran", "trade", "export", "import",
+        "oil", "gas", "energy", "investment", "financial", "budget"
     ]
     
-    # GEOPOLITICAL REGIONS
-    REGIONAL_KEYWORDS = [
-        # Persian regions
-        "خاورمیانه", "خلیج‌فارس", "فلسطین", "لبنان", "سوریه", "عراق", "یمن", "عربستان",
-        "امارات", "کویت", "قطر", "بحرین", "عمان", "ترکیه", "پاکستان", "افغانستان",
+    # GEOPOLITICAL KEYWORDS
+    GEOPOLITICAL_KEYWORDS = [
+        # Persian geopolitical
+        "تحریم", "تحریم‌ها", "عقوبات", "فشار‌اقتصادی", "جنگ‌اقتصادی",
+        "آمریکا", "امریکا", "اسرائیل", "اروپا", "چین", "روسیه",
+        "برجام", "مذاکره", "توافق", "سیاست", "دیپلماسی",
         
-        # English regions
-        "middle", "east", "persian", "gulf", "palestine", "lebanon", "syria", "iraq",
-        "yemen", "saudi", "arabia", "uae", "kuwait", "qatar", "bahrain", "oman", "turkey"
+        # English geopolitical
+        "sanctions", "embargo", "america", "israel", "china", "russia",
+        "nuclear", "diplomacy", "political", "agreement", "jcpoa"
     ]
     
-    # ECONOMIC WARFARE KEYWORDS
-    ECONOMIC_WARFARE_KEYWORDS = [
-        # Persian economic warfare
-        "جنگ‌اقتصادی", "تحریم‌اقتصادی", "محاصره‌اقتصادی", "فشار‌اقتصادی", "عقوبات",
-        "مسدود‌کردن", "دارایی", "منابع", "سوئیفت", "بانکی", "مالی", "سرمایه",
+    # TECHNICAL ANALYSIS KEYWORDS
+    TECHNICAL_KEYWORDS = [
+        # Persian technical
+        "تحلیل", "پیش‌بینی", "انتظار", "احتمال", "روند", "گزارش",
+        "شاخص", "نمودار", "آمار", "اطلاعات", "داده", "رقم",
         
-        # English economic warfare
-        "economic", "warfare", "embargo", "blockade", "freeze", "assets", "swift",
-        "financial", "monetary", "capital", "trade", "commerce"
+        # English technical
+        "analysis", "forecast", "prediction", "trend", "report",
+        "index", "chart", "data", "statistics", "figure"
     ]
 
     @classmethod
     def is_relevant_news(cls, text):
         """
-        Enhanced relevance check for financial and geopolitical news.
+        Enhanced relevance check for financial news with LOWER thresholds.
         
         Returns:
             tuple: (is_relevant, relevance_score, matching_topics)
@@ -70,43 +73,43 @@ class NewsFilter:
         matching_topics = []
         relevance_score = 0
         
-        # Critical keywords (score: 10 each)
-        critical_matches = [kw for kw in cls.CRITICAL_KEYWORDS if kw in text_lower]
+        # Critical financial keywords (score: 5 each - LOWERED from 10)
+        critical_matches = [kw for kw in cls.CRITICAL_FINANCIAL_KEYWORDS if kw in text_lower]
         if critical_matches:
-            relevance_score += len(critical_matches) * 10
-            matching_topics.extend([f"CRITICAL:{kw}" for kw in critical_matches[:3]])
+            relevance_score += len(critical_matches) * 5
+            matching_topics.extend([f"FINANCIAL:{kw}" for kw in critical_matches[:3]])
         
-        # High priority keywords (score: 5 each)
+        # High priority keywords (score: 3 each - LOWERED from 5)
         high_matches = [kw for kw in cls.HIGH_PRIORITY_KEYWORDS if kw in text_lower]
         if high_matches:
-            relevance_score += len(high_matches) * 5
+            relevance_score += len(high_matches) * 3
             matching_topics.extend([f"HIGH:{kw}" for kw in high_matches[:3]])
         
-        # Regional keywords (score: 3 each)
-        regional_matches = [kw for kw in cls.REGIONAL_KEYWORDS if kw in text_lower]
-        if regional_matches:
-            relevance_score += len(regional_matches) * 3
-            matching_topics.extend([f"REGION:{kw}" for kw in regional_matches[:2]])
+        # Geopolitical keywords (score: 2 each - SAME)
+        geo_matches = [kw for kw in cls.GEOPOLITICAL_KEYWORDS if kw in text_lower]
+        if geo_matches:
+            relevance_score += len(geo_matches) * 2
+            matching_topics.extend([f"GEO:{kw}" for kw in geo_matches[:2]])
         
-        # Economic warfare keywords (score: 7 each)
-        econ_war_matches = [kw for kw in cls.ECONOMIC_WARFARE_KEYWORDS if kw in text_lower]
-        if econ_war_matches:
-            relevance_score += len(econ_war_matches) * 7
-            matching_topics.extend([f"ECON_WAR:{kw}" for kw in econ_war_matches[:2]])
+        # Technical analysis keywords (score: 1 each)
+        tech_matches = [kw for kw in cls.TECHNICAL_KEYWORDS if kw in text_lower]
+        if tech_matches:
+            relevance_score += len(tech_matches) * 1
+            matching_topics.extend([f"TECH:{kw}" for kw in tech_matches[:2]])
         
         # Bonus for news structure patterns
         if cls._has_news_structure(text):
-            relevance_score += 5
+            relevance_score += 2  # LOWERED from 5
             matching_topics.append("NEWS_STRUCTURE")
         
-        # Bonus for multiple entities (Iran + USA, Israel + Gaza, etc.)
-        entity_bonus = cls._calculate_entity_bonus(text_lower)
+        # Bonus for multiple financial entities
+        entity_bonus = cls._calculate_financial_entity_bonus(text_lower)
         relevance_score += entity_bonus
         if entity_bonus > 0:
-            matching_topics.append(f"MULTI_ENTITY:{entity_bonus}")
+            matching_topics.append(f"MULTI_FINANCIAL:{entity_bonus}")
         
-        # Determine relevance with multiple thresholds
-        is_relevant = cls._determine_enhanced_relevance(
+        # Determine relevance with LOWERED thresholds
+        is_relevant = cls._determine_financial_relevance(
             relevance_score, critical_matches, high_matches, text_lower
         )
         
@@ -115,7 +118,7 @@ class NewsFilter:
         
         # Log for debugging
         if relevance_score > 0:
-            logger.debug(f"Enhanced relevance: score={relevance_score}, "
+            logger.debug(f"Financial relevance: score={relevance_score}, "
                         f"critical={len(critical_matches)}, high={len(high_matches)}, "
                         f"is_relevant={is_relevant}")
         
@@ -126,117 +129,130 @@ class NewsFilter:
         """Check if text has news-like structure."""
         # Look for news patterns
         news_patterns = [
-            r'گزارش\s+می‌دهد',  # reports
-            r'اعلام\s+کرد',      # announced
-            r'بیان\s+داشت',     # stated
-            r'گفت',             # said
-            r'مدعی\s+شد',       # claimed
-            r'تأیید\s+کرد',     # confirmed
-            r'منابع\s+خبری',    # news sources
-            r'خبرگزاری',        # news agency
-            r'آژانس',           # agency
-            r':[^:]+$',         # ends with colon (common in news)
+            r'اعلام\s+(شد|کرد)',      # announced
+            r'گزارش\s+می‌دهد',       # reports
+            r'بیان\s+داشت',          # stated
+            r'تأیید\s+کرد',          # confirmed
+            r'منابع\s+خبری',         # news sources
+            r'خبرگزاری',             # news agency
+            r'آژانس',                # agency
+            r'قیمت\s+.+\s+رسید',     # price reached
+            r'نرخ\s+.+\s+شد',        # rate became
+            r'بازار\s+.+\s+(بسته|باز)', # market closed/opened
+            r'\d+\s+(تومان|دلار|یورو)', # numbers with currency
         ]
         
         return any(re.search(pattern, text) for pattern in news_patterns)
 
     @classmethod
-    def _calculate_entity_bonus(cls, text_lower):
-        """Calculate bonus for multiple important entities mentioned."""
-        entities = {
-            'iran': any(kw in text_lower for kw in ['ایران', 'iran', 'iranian']),
-            'israel': any(kw in text_lower for kw in ['اسرائیل', 'israel', 'israeli']),
-            'usa': any(kw in text_lower for kw in ['آمریکا', 'امریکا', 'america', 'usa', 'washington']),
-            'trump': any(kw in text_lower for kw in ['ترامپ', 'trump']),
-            'gaza': any(kw in text_lower for kw in ['غزه', 'gaza', 'palestine']),
-            'war': any(kw in text_lower for kw in ['جنگ', 'حمله', 'war', 'attack', 'conflict']),
-            'nuclear': any(kw in text_lower for kw in ['هسته‌ای', 'اتمی', 'nuclear', 'atomic']),
-            'sanctions': any(kw in text_lower for kw in ['تحریم', 'sanctions', 'embargo'])
+    def _calculate_financial_entity_bonus(cls, text_lower):
+        """Calculate bonus for multiple financial entities mentioned."""
+        financial_entities = {
+            'gold': any(kw in text_lower for kw in ['طلا', 'سکه', 'gold', 'ounce']),
+            'currency': any(kw in text_lower for kw in ['دلار', 'یورو', 'ارز', 'dollar', 'euro', 'currency']),
+            'iran_economy': any(kw in text_lower for kw in ['ایران', 'تهران', 'iran', 'iranian']),
+            'market': any(kw in text_lower for kw in ['بازار', 'بورس', 'market', 'stock']),
+            'price': any(kw in text_lower for kw in ['قیمت', 'نرخ', 'price', 'rate']),
+            'bank': any(kw in text_lower for kw in ['بانک', 'bank', 'central']),
+            'oil': any(kw in text_lower for kw in ['نفت', 'گاز', 'oil', 'gas']),
+            'crypto': any(kw in text_lower for kw in ['بیت‌کوین', 'bitcoin', 'crypto'])
         }
         
-        entity_count = sum(entities.values())
+        entity_count = sum(financial_entities.values())
         
-        # Bonus scoring
+        # LOWERED bonus scoring
         if entity_count >= 4:
-            return 10  # Multiple major entities
+            return 5  # was 10
         elif entity_count >= 3:
-            return 7   # Several entities
+            return 3  # was 7
         elif entity_count >= 2:
-            return 5   # Two entities
+            return 2  # was 5
         else:
             return 0
 
     @classmethod
-    def _determine_enhanced_relevance(cls, score, critical_matches, high_matches, text_lower):
-        """Enhanced relevance determination with multiple criteria."""
+    def _determine_financial_relevance(cls, score, critical_matches, high_matches, text_lower):
+        """Enhanced relevance determination with LOWERED criteria for financial news."""
         
-        # Always relevant if multiple critical keywords
+        # Always relevant if strong financial content
         if len(critical_matches) >= 2:
             return True
         
-        # Always relevant if single critical + high score
-        if critical_matches and score >= 15:
+        # Always relevant if single financial keyword + decent score
+        if critical_matches and score >= 8:  # LOWERED from 15
             return True
         
-        # High threshold for general content
-        if score >= 25:
+        # LOWERED threshold for general financial content
+        if score >= 10:  # LOWERED from 25
             return True
         
-        # Medium threshold for news with structure
-        if score >= 15 and cls._has_news_structure(text_lower):
+        # LOWERED threshold for news with structure
+        if score >= 6 and cls._has_news_structure(text_lower):  # LOWERED from 15
             return True
         
-        # Lower threshold for Iran-specific content
+        # Iran-specific financial content
         iran_content = any(kw in text_lower for kw in ['ایران', 'iran', 'iranian', 'tehran', 'تهران'])
-        if iran_content and score >= 10:
+        if iran_content and score >= 5:  # LOWERED from 10
             return True
         
-        # War/conflict threshold
-        war_content = any(kw in text_lower for kw in ['جنگ', 'حمله', 'war', 'attack', 'conflict', 'threat'])
-        if war_content and score >= 12:
+        # Strong financial indicators (gold, currency, etc.)
+        strong_financial = any(kw in text_lower for kw in [
+            'طلا', 'سکه', 'دلار', 'یورو', 'gold', 'dollar', 'euro', 'ارز', 'نرخ', 'قیمت'
+        ])
+        if strong_financial and score >= 4:  # LOWERED from 8
             return True
         
-        # Economic crisis threshold
-        crisis_content = any(kw in text_lower for kw in ['بحران', 'تحریم', 'crisis', 'sanctions', 'embargo'])
-        if crisis_content and score >= 10:
+        # Economic/market content
+        market_content = any(kw in text_lower for kw in ['بازار', 'بورس', 'market', 'stock', 'اقتصاد', 'economy'])
+        if market_content and score >= 3:  # LOWERED from 10
             return True
         
-        # Standard threshold
-        return score >= 20
+        # Standard threshold - SIGNIFICANTLY LOWERED
+        return score >= 8  # LOWERED from 20
 
     @classmethod
     def get_priority_level(cls, relevance_score):
-        """Get priority level based on enhanced scoring."""
-        if relevance_score >= 50:
+        """Get priority level based on enhanced scoring - LOWERED thresholds."""
+        if relevance_score >= 25:      # was 50
             return "CRITICAL"
-        elif relevance_score >= 30:
+        elif relevance_score >= 15:    # was 30
             return "URGENT"
-        elif relevance_score >= 20:
+        elif relevance_score >= 8:     # was 20
             return "HIGH"
-        elif relevance_score >= 10:
+        elif relevance_score >= 4:     # was 10
             return "NORMAL"
         else:
             return "LOW"
 
     @classmethod
-    def get_news_category(cls, text, matching_topics):
-        """Determine primary news category from enhanced analysis."""
-        text_lower = text.lower()
+    def get_financial_category(cls, text, matching_topics):
+        """Determine primary financial category from enhanced analysis."""
+        if not matching_topics:
+            return "GENERAL_FINANCIAL"
         
-        # Analyze critical patterns
-        if any('CRITICAL:هسته‌ای' in topic or 'CRITICAL:nuclear' in topic for topic in matching_topics):
-            return "NUCLEAR_CRISIS"
-        elif any('CRITICAL:جنگ' in topic or 'CRITICAL:war' in topic for topic in matching_topics):
-            return "WAR_CONFLICT"
-        elif any('CRITICAL:ایران' in topic for topic in matching_topics):
-            return "IRAN_GEOPOLITICAL"
-        elif any('CRITICAL:اسرائیل' in topic or 'CRITICAL:israel' in topic for topic in matching_topics):
-            return "ISRAEL_OPERATIONS"
-        elif any('CRITICAL:طلا' in topic or 'CRITICAL:gold' in topic for topic in matching_topics):
-            return "GOLD_MARKETS"
-        elif any('CRITICAL:دلار' in topic or 'CRITICAL:dollar' in topic for topic in matching_topics):
-            return "CURRENCY_MARKETS"
-        elif any('ECON_WAR:' in topic for topic in matching_topics):
-            return "ECONOMIC_WARFARE"
+        # Count different category types
+        category_counts = {}
+        for topic in matching_topics:
+            if ':' in topic:
+                category = topic.split(':')[0]
+                category_counts[category] = category_counts.get(category, 0) + 1
+        
+        # Determine based on topic analysis and text content
+        text_lower = text.lower() if text else ""
+        
+        if any('طلا' in topic or 'سکه' in topic or 'gold' in topic for topic in matching_topics):
+            return "GOLD_PRECIOUS"
+        elif any('دلار' in topic or 'یورو' in topic or 'ارز' in topic or 'dollar' in topic or 'euro' in topic for topic in matching_topics):
+            return "CURRENCY_FOREX"
+        elif any('نفت' in topic or 'گاز' in topic or 'oil' in topic or 'gas' in topic for topic in matching_topics):
+            return "OIL_ENERGY"
+        elif any('بیت‌کوین' in topic or 'bitcoin' in topic or 'crypto' in topic for topic in matching_topics):
+            return "CRYPTOCURRENCY"
+        elif any('بورس' in topic or 'سهام' in topic or 'stock' in topic for topic in matching_topics):
+            return "STOCK_MARKET"
+        elif any('تحریم' in topic or 'sanctions' in topic for topic in matching_topics):
+            return "ECONOMIC_SANCTIONS"
+        elif any('ایران' in topic or 'iran' in topic for topic in matching_topics):
+            return "IRANIAN_ECONOMY"
         else:
-            return "GEOPOLITICAL_ECONOMIC"
+            return "GENERAL_FINANCIAL"

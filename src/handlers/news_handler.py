@@ -215,7 +215,9 @@ class NewsHandler:
             channel_entity = await self.client_manager.client.get_entity(channel_username)
             
             # Get recent messages (last 3 hours)
-            cutoff_time = datetime.now() - timedelta(hours=3)
+            # CORRECT - uses setting:
+            from config.settings import MESSAGE_LOOKBACK_HOURS
+            cutoff_time = datetime.now() - timedelta(hours=MESSAGE_LOOKBACK_HOURS)
             
             messages_processed = 0
             news_sent_for_approval = 0
@@ -223,7 +225,9 @@ class NewsHandler:
             
             logger.info(f"📥 Retrieving recent messages from {channel_username}")
             
-            async for message in self.client_manager.client.iter_messages(channel_entity, limit=30):
+            # CORRECT - uses setting:
+            from config.settings import MAX_MESSAGES_PER_CHECK
+            async for message in self.client_manager.client.iter_messages(channel_entity, limit=MAX_MESSAGES_PER_CHECK):
                 try:
                     total_messages += 1
                     

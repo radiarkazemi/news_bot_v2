@@ -1,5 +1,6 @@
 """
 Complete application settings for the Financial News Detector.
+Enhanced for financial news detection with proper defaults.
 """
 import os
 import pytz
@@ -67,7 +68,7 @@ OPERATION_END_HOUR = int(os.getenv("OPERATION_END_HOUR", "22"))
 FORCE_24_HOUR_OPERATION = os.getenv("FORCE_24_HOUR_OPERATION", "false").lower() == "true"
 
 # Check intervals (in seconds)
-NEWS_CHECK_INTERVAL = int(os.getenv("NEWS_CHECK_INTERVAL", "1800"))  # 30 minutes
+NEWS_CHECK_INTERVAL = int(os.getenv("NEWS_CHECK_INTERVAL", "900"))  # 15 minutes (was 30)
 HEALTH_CHECK_INTERVAL = int(os.getenv("HEALTH_CHECK_INTERVAL", "300"))  # 5 minutes
 CONNECTION_RETRY_INTERVAL = int(os.getenv("CONNECTION_RETRY_INTERVAL", "30"))  # 30 seconds
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "60"))  # 1 minute
@@ -80,10 +81,10 @@ APPROVAL_BOT_DELAY = int(os.getenv("APPROVAL_BOT_DELAY", "1"))
 CHECK_OUTSIDE_HOURS = 15 * 60  # 15 minutes
 
 # ============================================================================
-# FINANCIAL NEWS CONFIGURATION
+# FINANCIAL NEWS CONFIGURATION (ENHANCED)
 # ============================================================================
 
-# Financial focus settings
+# Financial focus settings - CHANGED DEFAULTS
 GOLD_NEWS_PRIORITY = os.getenv("GOLD_NEWS_PRIORITY", "true").lower() == "true"
 CURRENCY_NEWS_PRIORITY = os.getenv("CURRENCY_NEWS_PRIORITY", "true").lower() == "true"
 IRANIAN_ECONOMY_FOCUS = os.getenv("IRANIAN_ECONOMY_FOCUS", "true").lower() == "true"
@@ -96,11 +97,16 @@ ECONOMIC_WAR_IMPACT = os.getenv("ECONOMIC_WAR_IMPACT", "true").lower() == "true"
 IRAN_SANCTIONS_FOCUS = os.getenv("IRAN_SANCTIONS_FOCUS", "true").lower() == "true"
 GEOPOLITICAL_ECONOMY = os.getenv("GEOPOLITICAL_ECONOMY", "true").lower() == "true"
 
-# Relevance scoring thresholds
-MIN_FINANCIAL_SCORE = int(os.getenv("MIN_FINANCIAL_SCORE", "2"))
-HIGH_PRIORITY_FINANCIAL_SCORE = int(os.getenv("HIGH_PRIORITY_FINANCIAL_SCORE", "5"))
-URGENT_FINANCIAL_SCORE = int(os.getenv("URGENT_FINANCIAL_SCORE", "8"))
-CRITICAL_FINANCIAL_SCORE = int(os.getenv("CRITICAL_FINANCIAL_SCORE", "15"))
+# WAR NEWS SETTINGS - CHANGED DEFAULTS FOR FINANCIAL FOCUS
+WAR_NEWS_ONLY = os.getenv("WAR_NEWS_ONLY", "false").lower() == "true"  # CHANGED DEFAULT
+ISRAEL_IRAN_FOCUS = os.getenv("ISRAEL_IRAN_FOCUS", "false").lower() == "true"  # CHANGED DEFAULT
+GEOPOLITICAL_ONLY = os.getenv("GEOPOLITICAL_ONLY", "false").lower() == "true"  # CHANGED DEFAULT
+
+# Relevance scoring thresholds - LOWERED DEFAULTS
+MIN_FINANCIAL_SCORE = int(os.getenv("MIN_FINANCIAL_SCORE", "1"))  # LOWERED from 2
+HIGH_PRIORITY_FINANCIAL_SCORE = int(os.getenv("HIGH_PRIORITY_FINANCIAL_SCORE", "3"))  # LOWERED from 5
+URGENT_FINANCIAL_SCORE = int(os.getenv("URGENT_FINANCIAL_SCORE", "5"))  # LOWERED from 8
+CRITICAL_FINANCIAL_SCORE = int(os.getenv("CRITICAL_FINANCIAL_SCORE", "8"))  # LOWERED from 15
 
 # Financial categories to monitor
 MONITOR_GOLD = os.getenv("MONITOR_GOLD", "true").lower() == "true"
@@ -117,14 +123,14 @@ MONITOR_STOCK_MARKETS = os.getenv("MONITOR_STOCK_MARKETS", "true").lower() == "t
 # Text processing limits
 MIN_NEWS_LENGTH = int(os.getenv("MIN_NEWS_LENGTH", "30"))
 MAX_NEWS_LENGTH = int(os.getenv("MAX_NEWS_LENGTH", "4000"))
-NEWS_SEGMENT_MIN_LENGTH = int(os.getenv("NEWS_SEGMENT_MIN_LENGTH", "50"))
+NEWS_SEGMENT_MIN_LENGTH = int(os.getenv("NEWS_SEGMENT_MIN_LENGTH", "20"))  # LOWERED from 50
 
 # Duplicate detection
 DUPLICATE_CHECK_WINDOW_HOURS = int(os.getenv("DUPLICATE_CHECK_WINDOW_HOURS", "24"))
 
-# Message processing limits
-MAX_MESSAGES_PER_CHECK = int(os.getenv("MAX_MESSAGES_PER_CHECK", "30"))
-MESSAGE_LOOKBACK_HOURS = int(os.getenv("MESSAGE_LOOKBACK_HOURS", "3"))
+# Message processing limits - ENHANCED FOR FINANCIAL
+MAX_MESSAGES_PER_CHECK = int(os.getenv("MAX_MESSAGES_PER_CHECK", "50"))  # INCREASED from 30
+MESSAGE_LOOKBACK_HOURS = int(os.getenv("MESSAGE_LOOKBACK_HOURS", "12"))  # INCREASED from 3
 
 # ============================================================================
 # APPROVAL SYSTEM CONFIGURATION
@@ -208,6 +214,20 @@ PROCESSED_MESSAGES_CACHE_SIZE = int(os.getenv("PROCESSED_MESSAGES_CACHE_SIZE", "
 ADMIN_BOT_CACHE_TIMEOUT = int(os.getenv("ADMIN_BOT_CACHE_TIMEOUT", "3600"))  # 1 hour
 
 # ============================================================================
+# FINANCIAL RELEVANCE SCORING (ENHANCED)
+# ============================================================================
+
+# LOWERED relevance thresholds for financial content
+MIN_RELEVANCE_SCORE = int(os.getenv("MIN_RELEVANCE_SCORE", "1"))  # LOWERED from 3
+HIGH_PRIORITY_SCORE = int(os.getenv("HIGH_PRIORITY_SCORE", "3"))  # LOWERED from 5
+URGENT_NEWS_SCORE = int(os.getenv("URGENT_NEWS_SCORE", "5"))  # LOWERED from 8
+
+# Financial keyword weights
+GOLD_KEYWORD_WEIGHT = int(os.getenv("GOLD_KEYWORD_WEIGHT", "3"))
+CURRENCY_KEYWORD_WEIGHT = int(os.getenv("CURRENCY_KEYWORD_WEIGHT", "3"))
+ECONOMY_KEYWORD_WEIGHT = int(os.getenv("ECONOMY_KEYWORD_WEIGHT", "2"))
+
+# ============================================================================
 # PROXY CONFIGURATION (Optional)
 # ============================================================================
 
@@ -235,40 +255,6 @@ TEST_MESSAGE_LIMIT = int(os.getenv("TEST_MESSAGE_LIMIT", "10"))
 # Debug features
 ENABLE_PERFORMANCE_MONITORING = os.getenv("ENABLE_PERFORMANCE_MONITORING", "false").lower() == "true"
 LOG_MESSAGE_SAMPLES = os.getenv("LOG_MESSAGE_SAMPLES", "false").lower() == "true"
-
-# ============================================================================
-# FINANCIAL KEYWORDS CONFIGURATION
-# ============================================================================
-
-# Enable/disable keyword categories
-ENABLE_PERSIAN_KEYWORDS = os.getenv("ENABLE_PERSIAN_KEYWORDS", "true").lower() == "true"
-ENABLE_ENGLISH_KEYWORDS = os.getenv("ENABLE_ENGLISH_KEYWORDS", "true").lower() == "true"
-
-# Keyword matching sensitivity
-KEYWORD_MATCH_CASE_SENSITIVE = os.getenv("KEYWORD_MATCH_CASE_SENSITIVE", "false").lower() == "true"
-ENABLE_FUZZY_MATCHING = os.getenv("ENABLE_FUZZY_MATCHING", "false").lower() == "true"
-
-# Custom keyword files (optional)
-CUSTOM_GOLD_KEYWORDS_FILE = os.getenv("CUSTOM_GOLD_KEYWORDS_FILE", "")
-CUSTOM_CURRENCY_KEYWORDS_FILE = os.getenv("CUSTOM_CURRENCY_KEYWORDS_FILE", "")
-CUSTOM_EXCLUSION_KEYWORDS_FILE = os.getenv("CUSTOM_EXCLUSION_KEYWORDS_FILE", "")
-
-# ============================================================================
-# MESSAGE FORMATTING CONFIGURATION
-# ============================================================================
-
-# Message formatting options
-USE_FINANCIAL_EMOJIS = os.getenv("USE_FINANCIAL_EMOJIS", "true").lower() == "true"
-INCLUDE_TIMESTAMPS = os.getenv("INCLUDE_TIMESTAMPS", "true").lower() == "true"
-INCLUDE_SOURCE_ATTRIBUTION = os.getenv("INCLUDE_SOURCE_ATTRIBUTION", "true").lower() == "true"
-INCLUDE_ANALYSIS_INFO = os.getenv("INCLUDE_ANALYSIS_INFO", "true").lower() == "true"
-
-# Emoji configuration
-GOLD_EMOJI = os.getenv("GOLD_EMOJI", "🏆")
-CURRENCY_EMOJI = os.getenv("CURRENCY_EMOJI", "💱")
-CRYPTO_EMOJI = os.getenv("CRYPTO_EMOJI", "₿")
-OIL_EMOJI = os.getenv("OIL_EMOJI", "🛢️")
-ECONOMIC_EMOJI = os.getenv("ECONOMIC_EMOJI", "📈")
 
 # ============================================================================
 # VALIDATION AND DEFAULTS
@@ -304,6 +290,10 @@ def validate_settings():
     if MIN_FINANCIAL_SCORE < 1:
         warnings.append("MIN_FINANCIAL_SCORE is very low")
     
+    # Check financial settings
+    if WAR_NEWS_ONLY and not (GOLD_NEWS_PRIORITY or CURRENCY_NEWS_PRIORITY):
+        warnings.append("WAR_NEWS_ONLY is enabled but financial categories are disabled - may miss financial news")
+    
     return warnings, errors
 
 def ANY_NEWS_CHANNELS_CONFIGURED():
@@ -324,15 +314,20 @@ def get_settings_summary():
         "operating_hours": f"{OPERATION_START_HOUR}:00-{OPERATION_END_HOUR}:00",
         "24h_mode": FORCE_24_HOUR_OPERATION,
         "check_interval": NEWS_CHECK_INTERVAL,
+        "message_lookback_hours": MESSAGE_LOOKBACK_HOURS,
         "financial_focus": {
             "gold": MONITOR_GOLD,
             "currency": MONITOR_CURRENCIES,
             "crypto": MONITOR_CRYPTO,
             "oil": MONITOR_OIL,
-            "iranian_economy": MONITOR_IRANIAN_ECONOMY
+            "iranian_economy": MONITOR_IRANIAN_ECONOMY,
+            "stock_markets": MONITOR_STOCK_MARKETS
         },
+        "war_news_only": WAR_NEWS_ONLY,
+        "geopolitical_only": GEOPOLITICAL_ONLY,
         "approval_system": ENABLE_ADMIN_APPROVAL,
-        "min_score": MIN_FINANCIAL_SCORE
+        "min_financial_score": MIN_FINANCIAL_SCORE,
+        "min_relevance_score": MIN_RELEVANCE_SCORE
     }
 
 # ============================================================================
@@ -380,5 +375,7 @@ __all__ = [
     'NEW_ATTRIBUTION', 'NEWS_CHECK_INTERVAL', 'OPERATION_START_HOUR', 'OPERATION_END_HOUR',
     'FORCE_24_HOUR_OPERATION', 'MIN_FINANCIAL_SCORE', 'ENABLE_ADMIN_APPROVAL',
     'ALL_NEWS_CHANNELS', 'get_active_news_channels', 'get_settings_summary',
-    'TEHRAN_TZ', 'DEBUG_MODE', 'LOG_LEVEL', 'CHANNEL_PROCESSING_DELAY'
+    'TEHRAN_TZ', 'DEBUG_MODE', 'LOG_LEVEL', 'CHANNEL_PROCESSING_DELAY',
+    'MESSAGE_LOOKBACK_HOURS', 'MAX_MESSAGES_PER_CHECK', 'MIN_RELEVANCE_SCORE',
+    'GOLD_NEWS_PRIORITY', 'CURRENCY_NEWS_PRIORITY', 'IRANIAN_ECONOMY_FOCUS'
 ]

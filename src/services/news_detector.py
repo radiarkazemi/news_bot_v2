@@ -1,6 +1,6 @@
 """
-Expanded financial and geopolitical news detector.
-Detects both direct financial news AND geopolitical events that impact markets.
+Enhanced financial and geopolitical news detector.
+Optimized for detecting financial news from Iranian gold/currency channels.
 """
 import logging
 import re
@@ -8,257 +8,175 @@ import re
 logger = logging.getLogger(__name__)
 
 class NewsDetector:
-    """Expanded news detector for financial + geopolitical content that affects markets."""
+    """Enhanced news detector optimized for financial and economic content."""
     
-    # DIRECT FINANCIAL KEYWORDS (Original)
+    # COMPREHENSIVE FINANCIAL KEYWORDS
     GOLD_KEYWORDS = [
-        "طلا", "گرم‌طلا", "طلای‌۱۸عیار", "طلای‌۲۴عیار", "طلای‌۲۲عیار", "طلای‌۲۱عیار",
-        "سکه", "سکه‌طلا", "نیم‌سکه", "ربع‌سکه", "گرمی", "اونس", "طلای‌آب‌شده",
-        "آبشده", "طلافروشی", "بازار‌طلا", "قیمت‌طلا", "نرخ‌طلا", "طلای‌کهنه",
-        "gold", "ounce", "troy", "bullion", "precious", "metal", "xau", "golden"
+        # Persian gold terms
+        "طلا", "طلای", "سکه", "سکه‌طلا", "نیم‌سکه", "ربع‌سکه", "گرم‌طلا", 
+        "طلای‌۱۸عیار", "طلای‌۲۴عیار", "طلای‌۲۲عیار", "طلای‌۲۱عیار",
+        "اونس", "اونس‌طلا", "طلافروشی", "بازار‌طلا", "قیمت‌طلا", "نرخ‌طلا", 
+        "آبشده", "طلای‌آب‌شده", "طلای‌کهنه", "گرمی",
+        
+        # English gold terms  
+        "gold", "ounce", "troy", "bullion", "precious", "metal", "xau", "xauusd", "golden"
     ]
     
     CURRENCY_KEYWORDS = [
+        # Persian currency terms
         "دلار", "یورو", "پوند", "ین", "یوان", "روپیه", "درهم", "دینار", "لیر", "ریال",
-        "نرخ‌ارز", "قیمت‌دلار", "قیمت‌یورو", "بازار‌ارز", "صرافی", "ارز", "ارزی",
-        "تتر", "usdt", "دلار‌تتر", "آزاد", "سامانه‌نیما", "نیما", "رسمی",
-        "dollar", "euro", "pound", "yen", "yuan", "currency", "exchange", "forex"
+        "ارز", "ارزی", "نرخ‌ارز", "قیمت‌دلار", "قیمت‌یورو", "بازار‌ارز",
+        "صرافی", "صرافی‌ها", "تتر", "usdt", "دلار‌تتر", "نرخ", "قیمت",
+        "آزاد", "سامانه‌نیما", "نیما", "رسمی", "مبادله", "تبدیل",
+        "افزایش", "کاهش", "رشد", "سقوط", "جهش", "ثبت",
+        
+        # English currency terms
+        "dollar", "euro", "pound", "yen", "yuan", "currency", "exchange", 
+        "forex", "usd", "eur", "gbp", "jpy", "cny", "rate", "price"
     ]
     
-    # GEOPOLITICAL KEYWORDS (New - Major Impact)
-    IRAN_KEYWORDS = [
-        # Persian Iran-related
-        "ایران", "جمهوری‌اسلامی", "تهران", "اسلامی", "خامنه‌ای", "رئیسی", "ظریف", "عراقچی",
-        "سپاه", "حزب‌الله", "محور‌مقاومت", "ایرانی", "فارس", "خلیج‌فارس",
+    IRANIAN_ECONOMY_KEYWORDS = [
+        # Persian economic terms
+        "اقتصاد", "اقتصادی", "بازار", "بورس", "سهام", "شاخص", "تورم", "رکود",
+        "بانک‌مرکزی", "سرمایه", "سرمایه‌گذاری", "تجارت", "صادرات", "واردات",
+        "بودجه", "مالی", "مالیات", "درآمد", "هزینه", "سود", "زیان",
+        "صنعت", "تولید", "تولیدات", "کارخانه", "کارگاه", "اشتغال", "بیکاری",
+        "تهران", "ایران", "ایرانی", "کشور", "ملی", "دولت", "دولتی",
         
-        # English Iran-related
-        "iran", "iranian", "tehran", "islamic", "republic", "irgc", "hezbollah", "persian"
+        # English economic terms
+        "economy", "economic", "market", "stock", "index", "inflation", "gdp",
+        "central", "bank", "investment", "trade", "export", "import", "budget",
+        "iran", "iranian", "tehran"
     ]
     
-    ISRAEL_USA_KEYWORDS = [
-        # Persian Israel/USA
-        "اسرائیل", "آمریکا", "امریکا", "واشنگتن", "تل‌آویو", "نتانیاهو", "بایدن", "ترامپ",
-        "کاخ‌سفید", "پنتاگون", "سیا", "موساد", "یهودی", "صهیونیست",
+    GEOPOLITICAL_KEYWORDS = [
+        # Persian geopolitical terms  
+        "تحریم", "تحریم‌ها", "عقوبات", "جنگ‌اقتصادی", "فشار‌اقتصادی",
+        "ایران", "آمریکا", "امریکا", "اسرائیل", "اروپا", "چین", "روسیه",
+        "برجام", "مذاکره", "توافق", "دیپلماسی", "سیاست", "سیاسی",
+        "واشنگتن", "تل‌آویو", "پکن", "مسکو", "بروکسل",
         
-        # English Israel/USA
-        "israel", "israeli", "america", "usa", "washington", "netanyahu", "biden", "trump",
-        "white", "house", "pentagon", "cia", "mossad", "jewish", "zionist"
+        # English geopolitical terms
+        "sanctions", "embargo", "iran", "america", "israel", "china", "russia",
+        "nuclear", "diplomacy", "political", "policy", "agreement", "jcpoa",
+        "washington", "telaviv", "beijing", "moscow"
     ]
     
-    WAR_CONFLICT_KEYWORDS = [
-        # Persian war/conflict
-        "جنگ", "حمله", "تهدید", "موشک", "پهپاد", "هواپیما", "بمباران", "انفجار",
-        "نظامی", "ارتش", "نیروی‌هوایی", "نیروی‌دریایی", "عملیات", "تحریم", "تهدید",
-        "حماس", "غزه", "فلسطین", "لبنان", "سوریه", "عراق", "یمن", "حوثی",
+    CRYPTO_KEYWORDS = [
+        # Persian crypto terms
+        "ارز‌دیجیتال", "رمزارز", "بیت‌کوین", "اتریوم", "کریپتو", "دیجیتال",
+        "بلاک‌چین", "استخراج", "ماینر", "ماینینگ", "رمزنگاری",
         
-        # English war/conflict
-        "war", "attack", "threat", "missile", "drone", "aircraft", "bombing", "explosion",
-        "military", "army", "air", "force", "navy", "operation", "sanction", "gaza", "hamas"
+        # English crypto terms  
+        "bitcoin", "ethereum", "crypto", "cryptocurrency", "blockchain", 
+        "btc", "eth", "mining", "digital", "coin", "token"
     ]
     
-    ECONOMIC_IMPACT_KEYWORDS = [
-        # Persian economic impact
-        "اقتصاد", "اقتصادی", "تورم", "رکود", "بحران", "بازار", "سهام", "بورس", "قیمت",
-        "صادرات", "واردات", "تجارت", "تحریم", "تحریم‌های", "بانک‌مرکزی", "نفت", "گاز",
-        "انرژی", "پتروشیمی", "صنعت", "تولید", "بودجه", "مالی", "سرمایه", "ارز",
+    OIL_ENERGY_KEYWORDS = [
+        # Persian oil/energy terms
+        "نفت", "گاز", "انرژی", "پتروشیمی", "پالایش", "پالایشگاه",
+        "اوپک", "opec", "بشکه", "تن", "لیتر", "بنزین", "گازوئیل",
+        "کرود", "برنت", "صنایع‌نفتی", "گاز‌طبیعی",
         
-        # English economic impact
-        "economic", "economy", "inflation", "recession", "crisis", "market", "stock", "trade",
-        "sanctions", "central", "bank", "oil", "gas", "energy", "industry", "budget", "finance"
+        # English oil/energy terms
+        "oil", "gas", "energy", "petroleum", "crude", "barrel", "brent", "wti",
+        "opec", "gasoline", "diesel", "refinery"
     ]
     
-    # URGENT GEOPOLITICAL KEYWORDS (Highest Priority)
-    URGENT_KEYWORDS = [
-        # High-impact events
-        "هسته‌ای", "اتمی", "برجام", "یورانیوم", "غنی‌سازی", "آژانس", "آمانو",
-        "nuclear", "atomic", "uranium", "enrichment", "iaea", "jcpoa",
+    # NEWS STRUCTURE INDICATORS (Lower weight but helps detection)
+    NEWS_INDICATORS = [
+        # Persian news indicators
+        "اعلام", "گزارش", "خبر", "فوری", "بیان", "اظهار", "تأیید", "رد",
+        "افزایش", "کاهش", "رشد", "ثبت", "رسید", "شد", "می‌شود",
+        "به‌روزرسانی", "تحلیل", "پیش‌بینی", "انتظار", "احتمال",
+        "امروز", "دیروز", "فردا", "هفته", "ماه", "سال",
         
-        # Crisis terms
-        "بحران", "جنگ‌جهانی", "جنگ‌منطقه‌ای", "crisis", "world", "war", "regional",
-        
-        # Economic warfare
-        "جنگ‌اقتصادی", "تحریم‌اقتصادی", "economic", "warfare", "embargo"
+        # English news indicators  
+        "announced", "reported", "breaking", "update", "reached", "rose", "fell",
+        "analysis", "forecast", "expected", "today", "yesterday", "week", "month"
     ]
     
-    # NON-NEWS KEYWORDS (to filter out)
+    # NON-NEWS FILTERS (Higher penalty)
     NON_NEWS_KEYWORDS = [
-        "ورزش", "فوتبال", "والیبال", "موسیقی", "سینما", "فیلم", "بازی", "سرگرمی",
-        "آشپزی", "غذا", "رستوران", "مد", "لباس", "زیبایی", "سلامت", "پزشکی",
+        # Persian non-news
+        "ورزش", "فوتبال", "والیبال", "بسکتبال", "موسیقی", "سینما", "فیلم", 
+        "بازی", "سرگرمی", "تفریح", "غذا", "آشپزی", "رستوران", 
+        "مد", "لباس", "زیبایی", "آرایش", "سلامت", "پزشکی",
         "عاشقانه", "ازدواج", "عروسی", "تولد", "جشن", "تعطیلات",
-        "sports", "football", "music", "movie", "game", "food", "fashion", "health"
+        "مسافرت", "گردش", "طبیعت", "حیوانات",
+        
+        # English non-news
+        "sports", "football", "soccer", "basketball", "music", "movie", "film",
+        "game", "entertainment", "food", "cooking", "restaurant", "fashion",
+        "beauty", "health", "medical", "travel", "tourism", "animals"
     ]
 
     def is_news(self, text):
-        """Enhanced news detection for financial + geopolitical content."""
+        """Enhanced news detection for financial content."""
         if not text or len(text.strip()) < 30:
             return False
         
         text_lower = text.lower()
         
-        # Count all keyword categories
-        financial_score = self._calculate_financial_score(text_lower)
-        geopolitical_score = self._calculate_geopolitical_score(text_lower)
-        economic_impact_score = self._calculate_economic_impact_score(text_lower)
-        urgent_score = self._calculate_urgent_score(text_lower)
+        # Calculate scores for different categories
+        gold_score = self._calculate_keyword_score(text_lower, self.GOLD_KEYWORDS, 3)
+        currency_score = self._calculate_keyword_score(text_lower, self.CURRENCY_KEYWORDS, 3) 
+        iranian_economy_score = self._calculate_keyword_score(text_lower, self.IRANIAN_ECONOMY_KEYWORDS, 2)
+        geopolitical_score = self._calculate_keyword_score(text_lower, self.GEOPOLITICAL_KEYWORDS, 2)
+        crypto_score = self._calculate_keyword_score(text_lower, self.CRYPTO_KEYWORDS, 2)
+        oil_score = self._calculate_keyword_score(text_lower, self.OIL_ENERGY_KEYWORDS, 2)
         
-        # Count non-news penalties
-        non_news_count = sum(1 for kw in self.NON_NEWS_KEYWORDS if kw in text_lower)
+        # News structure bonus (lower weight)
+        structure_score = self._calculate_keyword_score(text_lower, self.NEWS_INDICATORS, 1)
         
-        # Total relevance score
-        total_score = financial_score + geopolitical_score + economic_impact_score + (urgent_score * 2)
+        # Penalty for non-news content
+        non_news_penalty = self._calculate_keyword_score(text_lower, self.NON_NEWS_KEYWORDS, 2)
         
-        # Apply penalty for non-news content
-        final_score = total_score - (non_news_count * 2)
+        # Calculate total score
+        total_score = (gold_score + currency_score + iranian_economy_score + 
+                      geopolitical_score + crypto_score + oil_score + 
+                      min(structure_score, 3) - non_news_penalty)  # Cap structure bonus
         
-        # Decision logic
-        is_relevant = self._determine_relevance(final_score, urgent_score, geopolitical_score, financial_score, non_news_count)
+        # LOWERED THRESHOLD: Accept if score >= 2 (was higher before)
+        is_relevant = total_score >= 2 and non_news_penalty <= 1
         
-        # Log detailed analysis for debugging
-        if final_score > 0 or non_news_count > 0:
-            logger.debug(f"News analysis: financial={financial_score}, geo={geopolitical_score}, "
-                        f"economic={economic_impact_score}, urgent={urgent_score}, "
-                        f"penalty={non_news_count}, final_score={final_score}, is_news={is_relevant}")
+        # Special case: If has strong financial indicators but low score
+        if not is_relevant and (gold_score >= 3 or currency_score >= 3):
+            is_relevant = True
+        
+        # Log detailed analysis in debug mode
+        if total_score > 0 or non_news_penalty > 0:
+            logger.debug(f"Financial news analysis: gold={gold_score}, currency={currency_score}, "
+                        f"economy={iranian_economy_score}, geo={geopolitical_score}, "
+                        f"crypto={crypto_score}, oil={oil_score}, structure={structure_score}, "
+                        f"penalty={non_news_penalty}, total={total_score}, is_news={is_relevant}")
         
         return is_relevant
 
-    def _calculate_financial_score(self, text_lower):
-        """Calculate direct financial keywords score."""
-        score = 0
-        score += sum(3 for kw in self.GOLD_KEYWORDS if kw in text_lower)
-        score += sum(3 for kw in self.CURRENCY_KEYWORDS if kw in text_lower)
-        return score
+    def _calculate_keyword_score(self, text_lower, keywords, multiplier):
+        """Calculate score for a keyword category."""
+        return sum(multiplier for kw in keywords if kw in text_lower)
 
-    def _calculate_geopolitical_score(self, text_lower):
-        """Calculate geopolitical keywords score."""
-        score = 0
-        score += sum(2 for kw in self.IRAN_KEYWORDS if kw in text_lower)
-        score += sum(2 for kw in self.ISRAEL_USA_KEYWORDS if kw in text_lower)
-        score += sum(2 for kw in self.WAR_CONFLICT_KEYWORDS if kw in text_lower)
-        return score
-
-    def _calculate_economic_impact_score(self, text_lower):
-        """Calculate economic impact keywords score."""
-        return sum(1 for kw in self.ECONOMIC_IMPACT_KEYWORDS if kw in text_lower)
-
-    def _calculate_urgent_score(self, text_lower):
-        """Calculate urgent keywords score."""
-        return sum(3 for kw in self.URGENT_KEYWORDS if kw in text_lower)
-
-    def _determine_relevance(self, final_score, urgent_score, geopolitical_score, financial_score, non_news_count):
-        """Determine if content is relevant news."""
-        
-        # Always relevant if urgent keywords present
-        if urgent_score >= 3:
-            return True
-        
-        # High relevance for strong geopolitical content
-        if geopolitical_score >= 4 and non_news_count <= 1:
-            return True
-        
-        # Medium relevance for moderate geopolitical + financial
-        if (geopolitical_score >= 2 and financial_score >= 1) and non_news_count == 0:
-            return True
-        
-        # Standard financial news
-        if financial_score >= 3 and non_news_count <= 1:
-            return True
-        
-        # General threshold
-        if final_score >= 5 and non_news_count <= 1:
-            return True
-        
-        # Lower threshold for Iran-specific content
-        iran_mentions = sum(1 for kw in self.IRAN_KEYWORDS if kw in final_score)
-        if iran_mentions >= 1 and final_score >= 3:
-            return True
-        
-        return False
-
-    def clean_news_text(self, text):
-        """Clean and format news text with appropriate emoji."""
-        if not text:
-            return ""
-        
-        # Basic cleaning
-        cleaned = text.strip()
-        cleaned = re.sub(r'@\w+', '', cleaned)
-        cleaned = re.sub(r'https?://\S+', '', cleaned)
-        cleaned = re.sub(r'\s+', ' ', cleaned)
-        
-        # Add appropriate emoji based on content
-        if not self._has_news_emoji(cleaned):
-            emoji = self._get_appropriate_emoji(cleaned)
-            cleaned = f"{emoji} {cleaned}"
-        
-        # Add attribution
-        from config.settings import NEW_ATTRIBUTION
-        if NEW_ATTRIBUTION and NEW_ATTRIBUTION not in cleaned:
-            cleaned = f"{cleaned}\n\n📡 {NEW_ATTRIBUTION}"
-        
-        # Add timestamp
-        from src.utils.time_utils import get_formatted_time
-        try:
-            current_time = get_formatted_time()
-            cleaned = f"{cleaned}\n🕐 {current_time}"
-        except:
-            pass
-        
-        return cleaned.strip()
-
-    def _has_news_emoji(self, text):
-        """Check if text already has news emoji."""
-        news_emojis = ['💰', '💱', '🏆', '₿', '🛢️', '📈', '📊', '⚡', '🚨', '🔥', '⚠️']
-        return any(emoji in text for emoji in news_emojis)
-
-    def _get_appropriate_emoji(self, text):
-        """Get appropriate emoji based on content priority."""
-        text_lower = text.lower()
-        
-        # Priority 1: Urgent/Crisis
-        if any(kw in text_lower for kw in self.URGENT_KEYWORDS):
-            return "🚨"
-        
-        # Priority 2: War/Conflict
-        if any(kw in text_lower for kw in self.WAR_CONFLICT_KEYWORDS):
-            return "⚡"
-        
-        # Priority 3: Iran/Geopolitical
-        if any(kw in text_lower for kw in self.IRAN_KEYWORDS + self.ISRAEL_USA_KEYWORDS):
-            return "🔥"
-        
-        # Priority 4: Direct Financial
-        if any(kw in text_lower for kw in self.GOLD_KEYWORDS):
-            return "🏆"
-        elif any(kw in text_lower for kw in self.CURRENCY_KEYWORDS):
-            return "💱"
-        
-        # Default: Economic impact
-        return "📈"
-
-    def get_news_category(self, text):
-        """Determine the primary news category."""
+    def get_financial_category(self, text):
+        """Determine the primary financial category."""
         if not text:
             return "unknown"
         
         text_lower = text.lower()
         
-        # Check categories in priority order
-        if any(kw in text_lower for kw in self.URGENT_KEYWORDS):
-            return "URGENT_NUCLEAR"
-        elif any(kw in text_lower for kw in self.WAR_CONFLICT_KEYWORDS):
-            return "WAR_CONFLICT"
-        elif any(kw in text_lower for kw in self.IRAN_KEYWORDS):
-            return "IRAN_GEOPOLITICAL"
-        elif any(kw in text_lower for kw in self.ISRAEL_USA_KEYWORDS):
-            return "ISRAEL_USA"
-        elif any(kw in text_lower for kw in self.GOLD_KEYWORDS):
-            return "GOLD_PRECIOUS"
-        elif any(kw in text_lower for kw in self.CURRENCY_KEYWORDS):
-            return "CURRENCY_FOREX"
-        elif any(kw in text_lower for kw in self.ECONOMIC_IMPACT_KEYWORDS):
-            return "ECONOMIC_IMPACT"
-        else:
-            return "GENERAL_NEWS"
+        # Count matches in each category
+        categories = {
+            "GOLD": self._calculate_keyword_score(text_lower, self.GOLD_KEYWORDS, 1),
+            "CURRENCY": self._calculate_keyword_score(text_lower, self.CURRENCY_KEYWORDS, 1),
+            "IRANIAN_ECONOMY": self._calculate_keyword_score(text_lower, self.IRANIAN_ECONOMY_KEYWORDS, 1),
+            "GEOPOLITICAL": self._calculate_keyword_score(text_lower, self.GEOPOLITICAL_KEYWORDS, 1),
+            "CRYPTO": self._calculate_keyword_score(text_lower, self.CRYPTO_KEYWORDS, 1),
+            "OIL_ENERGY": self._calculate_keyword_score(text_lower, self.OIL_ENERGY_KEYWORDS, 1)
+        }
+        
+        # Return category with highest score
+        max_category = max(categories.items(), key=lambda x: x[1])
+        return max_category[0] if max_category[1] > 0 else "GENERAL_FINANCIAL"
 
     def get_relevance_score(self, text):
         """Get comprehensive relevance score."""
@@ -267,9 +185,77 @@ class NewsDetector:
         
         text_lower = text.lower()
         
-        financial_score = self._calculate_financial_score(text_lower)
-        geopolitical_score = self._calculate_geopolitical_score(text_lower)
-        economic_impact_score = self._calculate_economic_impact_score(text_lower)
-        urgent_score = self._calculate_urgent_score(text_lower)
+        gold_score = self._calculate_keyword_score(text_lower, self.GOLD_KEYWORDS, 3)
+        currency_score = self._calculate_keyword_score(text_lower, self.CURRENCY_KEYWORDS, 3)
+        iranian_economy_score = self._calculate_keyword_score(text_lower, self.IRANIAN_ECONOMY_KEYWORDS, 2)
+        geopolitical_score = self._calculate_keyword_score(text_lower, self.GEOPOLITICAL_KEYWORDS, 2)
+        crypto_score = self._calculate_keyword_score(text_lower, self.CRYPTO_KEYWORDS, 2)
+        oil_score = self._calculate_keyword_score(text_lower, self.OIL_ENERGY_KEYWORDS, 2)
+        structure_score = self._calculate_keyword_score(text_lower, self.NEWS_INDICATORS, 1)
         
-        return financial_score + geopolitical_score + economic_impact_score + (urgent_score * 2)
+        return gold_score + currency_score + iranian_economy_score + geopolitical_score + crypto_score + oil_score + min(structure_score, 3)
+
+    def get_news_category(self, text):
+        """Determine the primary news category."""
+        return self.get_financial_category(text)
+
+    def clean_news_text(self, text):
+        """Clean and format news text with appropriate emoji."""
+        if not text:
+            return ""
+        
+        # Basic cleaning
+        cleaned = text.strip()
+        cleaned = re.sub(r'@\w+', '', cleaned)  # Remove handles
+        cleaned = re.sub(r'https?://\S+', '', cleaned)  # Remove URLs
+        cleaned = re.sub(r'\s+', ' ', cleaned)  # Normalize whitespace
+        
+        # Add appropriate emoji based on content
+        if not self._has_financial_emoji(cleaned):
+            emoji = self._get_financial_emoji(cleaned)
+            cleaned = f"{emoji} {cleaned}"
+        
+        return cleaned.strip()
+
+    def _has_financial_emoji(self, text):
+        """Check if text already has financial emoji."""
+        financial_emojis = ['💰', '💱', '🏆', '₿', '🛢️', '📈', '📊', '💎', '🪙']
+        return any(emoji in text for emoji in financial_emojis)
+
+    def _get_financial_emoji(self, text):
+        """Get appropriate financial emoji."""
+        text_lower = text.lower()
+        
+        if any(kw in text_lower for kw in self.GOLD_KEYWORDS):
+            return "🏆"
+        elif any(kw in text_lower for kw in self.CURRENCY_KEYWORDS):
+            return "💱"
+        elif any(kw in text_lower for kw in self.CRYPTO_KEYWORDS):
+            return "₿"
+        elif any(kw in text_lower for kw in self.OIL_ENERGY_KEYWORDS):
+            return "🛢️"
+        else:
+            return "📈"
+
+    def split_combined_news(self, text):
+        """Split combined news messages into segments."""
+        if not text:
+            return [text]
+        
+        # Look for news separators
+        separators = ['---', '===', '***', '░░░', '▫️▫️', '◦◦◦', '━━━', '▬▬▬']
+        
+        for sep in separators:
+            if sep in text:
+                segments = [seg.strip() for seg in text.split(sep)]
+                return [seg for seg in segments if len(seg.strip()) >= 30]
+        
+        # Check for numbered items (1. 2. 3. etc.)
+        if re.search(r'\d+[\.\)]\s', text):
+            segments = re.split(r'\d+[\.\)]\s', text)
+            segments = [seg.strip() for seg in segments if len(seg.strip()) >= 30]
+            if len(segments) > 1:
+                return segments
+        
+        # No separators found
+        return [text]
