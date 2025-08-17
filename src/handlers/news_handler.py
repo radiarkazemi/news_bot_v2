@@ -1,6 +1,6 @@
 """
-Complete news handler with financial focus, approval workflow, and inline keyboard buttons.
-Handles news detection, filtering, approval, and publishing with rate limiting.
+Complete news handler with financial focus, approval workflow, image handling, and clickable commands.
+Handles news detection, filtering, approval, publishing with media support, and cleanup.
 """
 import asyncio
 import hashlib
@@ -12,7 +12,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from collections import deque
 
-from telethon import events, Button
+try:
+    import aiofiles
+    import aiohttp
+    MEDIA_SUPPORT = True
+except ImportError:
+    MEDIA_SUPPORT = False
+    logging.getLogger(__name__).warning("aiofiles/aiohttp not available - media features disabled")
+
+from telethon import events
 from telethon.errors import FloodWaitError
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
@@ -23,7 +31,9 @@ from src.client.bot_api import BotAPIClient
 from src.utils.time_utils import get_current_time, get_formatted_time
 from config.settings import (
     TARGET_CHANNEL_ID, ADMIN_BOT_USERNAME, NEW_ATTRIBUTION,
-    NEWS_CHANNEL, TWITTER_NEWS_CHANNEL, CHANNEL_PROCESSING_DELAY
+    NEWS_CHANNEL, TWITTER_NEWS_CHANNEL, CHANNEL_PROCESSING_DELAY,
+    TEMP_MEDIA_DIR, MEDIA_CLEANUP_ENABLED, MEDIA_CLEANUP_DELAY,
+    MAX_MEDIA_SIZE_MB, ENABLE_MEDIA_PROCESSING
 )
 
 logger = logging.getLogger(__name__)
@@ -128,22 +138,41 @@ class NewsHandler:
         self.state_file = Path("data/state/news_handler_state.json")
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         
-        logger.info("📰 News handler initialized with financial focus and rate limiting")
+        logger.info("📰 News handler initialized with financial focus, rate limiting, and media support")
 
     async def initialize(self):
-        """Initialize the news handler with Bot API."""
+        """Initialize the news handler with Bot API and media cleanup."""
         try:
             self.bot_api = BotAPIClient()
-            logger.info("✅ News handler initialized with Bot API")
+            
+            # Start periodic media cleanup if media support is enabled
+            if MEDIA_SUPPORT and ENABLE_MEDIA_PROCESSING and MEDIA_CLEANUP_ENABLED:
+                asyncio.create_task(self._periodic_media_cleanup())
+                logger.info("🧹 Periodic media cleanup started")
+            
+            logger.info("✅ News handler initialized with Bot API and media support")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Bot API: {e}")
 
+    async def _periodic_media_cleanup(self):
+        """Periodic cleanup of old media files."""
+        while True:
+            try:
+                await asyncio.sleep(MEDIA_CLEANUP_DELAY)  # Wait for cleanup interval
+                await self.cleanup_all_temp_media()
+            except asyncio.CancelledError:
+                logger.info("Media cleanup task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in periodic media cleanup: {e}")
+                await asyncio.sleep(300)  # Wait 5 minutes on error
+
     async def setup_approval_handler(self):
-        """Set up the approval command handler with inline keyboard support."""
+        """Set up the approval command handler with clickable commands."""
         try:
             client = self.client_manager.client
             
-            # Handle text commands (backward compatibility)
+            # Handle approval commands
             @client.on(events.NewMessage(pattern=r'/submit(\w+)'))
             async def handle_approval_command(event):
                 """Handle approval commands from admin bot."""
@@ -162,27 +191,7 @@ class NewsHandler:
                 except Exception as e:
                     logger.error(f"❌ Error handling rejection command: {e}")
             
-            # Handle inline keyboard callbacks
-            @client.on(events.CallbackQuery)
-            async def handle_callback_query(event):
-                """Handle inline keyboard button clicks."""
-                try:
-                    data = event.data.decode('utf-8')
-                    
-                    if data.startswith('approve_'):
-                        approval_id = data.replace('approve_', '')
-                        await self._process_approval(approval_id, event)
-                    elif data.startswith('reject_'):
-                        approval_id = data.replace('reject_', '')
-                        await self._process_rejection(approval_id, event)
-                    elif data.startswith('copy_'):
-                        approval_id = data.replace('copy_', '')
-                        await event.answer(f"ID copied: {approval_id}", alert=True)
-                        
-                except Exception as e:
-                    logger.error(f"❌ Error handling callback query: {e}")
-            
-            logger.info("✅ News approval handler set up successfully with inline keyboards")
+            logger.info("✅ News approval handler set up successfully with clickable commands")
             return True
             
         except Exception as e:
@@ -209,15 +218,7 @@ class NewsHandler:
         if success:
             # Success response
             response_text = f"✅ News {approval_id} published successfully to channel!"
-            
-            # Edit message to show approval status
-            if hasattr(event, 'edit'):
-                try:
-                    await event.edit(f"✅ **APPROVED & PUBLISHED**\n\n{response_text}")
-                except:
-                    await event.respond(response_text)
-            else:
-                await event.respond(response_text)
+            await event.respond(response_text)
             
             logger.info(f"✅ Successfully published approved news: {approval_id}")
             
@@ -232,14 +233,7 @@ class NewsHandler:
         else:
             # Failure response
             error_text = f"❌ Failed to publish news {approval_id}. Please try again or contact support."
-            
-            if hasattr(event, 'edit'):
-                try:
-                    await event.edit(f"❌ **PUBLISHING FAILED**\n\n{error_text}")
-                except:
-                    await event.respond(error_text)
-            else:
-                await event.respond(error_text)
+            await event.respond(error_text)
             
             logger.error(f"❌ Failed to publish approved news: {approval_id}")
 
@@ -254,22 +248,15 @@ class NewsHandler:
             await self.save_pending_news()
             
             response_text = f"🚫 News {approval_id} rejected and removed from queue"
-            
-            # Edit message to show rejection status
-            if hasattr(event, 'edit'):
-                try:
-                    await event.edit(f"🚫 **REJECTED**\n\n{response_text}")
-                except:
-                    await event.respond(response_text)
-            else:
-                await event.respond(response_text)
+            await event.respond(response_text)
             
             logger.info(f"🚫 News {approval_id} rejected and removed")
         else:
             await event.respond(f"❌ News item {approval_id} not found")
 
     async def publish_approved_news(self, news_data):
-        """Publish approved news to the target channel."""
+        """Publish approved news to the target channel with media support and Persian calendar format."""
+        temp_media_path = None
         try:
             if not self.bot_api:
                 logger.error("❌ Bot API not available for publishing")
@@ -290,17 +277,62 @@ class NewsHandler:
             
             # Add attribution if not present
             if NEW_ATTRIBUTION and NEW_ATTRIBUTION not in formatted_text:
-                formatted_text = f"{formatted_text}\n\n📡 {NEW_ATTRIBUTION}"
+                formatted_text = f"{formatted_text}\n📡 {NEW_ATTRIBUTION}"
             
-            # Add timestamp if not present
-            if "🕐" not in formatted_text:
-                current_time = get_formatted_time()
-                formatted_text = f"{formatted_text}\n🕐 {current_time}"
+            # Add Persian calendar timestamp
+            current_time = get_formatted_time(format_type="persian_full")
+            formatted_text = f"{formatted_text}\n🕐 {current_time}"
             
-            # Publish to target channel
             logger.info(f"📤 Attempting to publish to channel {TARGET_CHANNEL_ID}")
             
-            # Create async context and properly await the send_message
+            # Handle media if present and media support is available
+            media_info = news_data.get('media')
+            if (MEDIA_SUPPORT and ENABLE_MEDIA_PROCESSING and 
+                media_info and news_data.get('has_media')):
+                
+                # Download media first
+                temp_media_path = await self._download_media_for_publishing(media_info)
+                
+                if temp_media_path and temp_media_path.exists():
+                    logger.info(f"📎 Publishing with media: {temp_media_path}")
+                    
+                    # Publish with media using Bot API
+                    async with self.bot_api as api_client:
+                        if (media_info.get('type') == 'photo' or 
+                            temp_media_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
+                            # Send as photo
+                            result = await api_client.send_photo(
+                                chat_id=TARGET_CHANNEL_ID,
+                                photo=temp_media_path,
+                                caption=formatted_text,
+                                parse_mode='HTML'
+                            )
+                        else:
+                            # Send as document
+                            result = await api_client.send_document(
+                                chat_id=TARGET_CHANNEL_ID,
+                                document=temp_media_path,
+                                caption=formatted_text,
+                                parse_mode='HTML'
+                            )
+                    
+                    if result:
+                        logger.info(f"📢 Financial news with media published to channel {TARGET_CHANNEL_ID}")
+                        logger.info(f"🆔 Published message ID: {result.get('message_id', 'Unknown')}")
+                        
+                        # Schedule media cleanup
+                        if MEDIA_CLEANUP_ENABLED:
+                            asyncio.create_task(self._cleanup_media_delayed(temp_media_path))
+                        
+                        return True
+                    else:
+                        logger.error("❌ Failed to publish news with media via Bot API")
+                        return False
+                else:
+                    logger.warning("⚠️ Failed to download media, publishing text only")
+                    # Fall through to text-only publishing
+            
+            # Publish text-only message
             async with self.bot_api as api_client:
                 result = await api_client.send_message(
                     chat_id=TARGET_CHANNEL_ID,
@@ -320,7 +352,147 @@ class NewsHandler:
             logger.error(f"❌ Error publishing approved news: {e}")
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
+            
+            # Clean up media on error
+            if temp_media_path and temp_media_path.exists() and MEDIA_CLEANUP_ENABLED:
+                try:
+                    temp_media_path.unlink()
+                    logger.info(f"🧹 Cleaned up media after error: {temp_media_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup media: {cleanup_error}")
+            
             return False
+
+    async def _download_media_for_publishing(self, media_info):
+        """Download media from original message for publishing."""
+        if not MEDIA_SUPPORT:
+            logger.warning("Media support not available (missing aiofiles/aiohttp)")
+            return None
+            
+        try:
+            if not media_info or not media_info.get('channel') or not media_info.get('message_id'):
+                logger.warning("Invalid media info for downloading")
+                return None
+            
+            # Get the source channel and message
+            channel_name = media_info['channel']
+            message_id = media_info['message_id']
+            
+            # Ensure channel name has @
+            if not channel_name.startswith('@'):
+                channel_name = f"@{channel_name}"
+            
+            logger.info(f"📥 Downloading media from {channel_name}, message {message_id}")
+            
+            # Get channel entity
+            channel_entity = await self.client_manager.client.get_entity(channel_name)
+            
+            # Get the specific message
+            message = await self.client_manager.client.get_messages(channel_entity, ids=message_id)
+            if not message or not message.media:
+                logger.warning(f"No media found in message {message_id}")
+                return None
+            
+            # Generate unique filename
+            timestamp = int(time.time())
+            media_hash = hashlib.md5(f"{channel_name}_{message_id}".encode()).hexdigest()[:8]
+            
+            # Determine file extension based on media type
+            if isinstance(message.media, MessageMediaPhoto):
+                file_extension = ".jpg"
+            elif isinstance(message.media, MessageMediaDocument):
+                # Try to get extension from document attributes
+                file_extension = ".jpg"  # Default
+                if hasattr(message.media.document, 'attributes'):
+                    for attr in message.media.document.attributes:
+                        if hasattr(attr, 'file_name') and attr.file_name:
+                            file_extension = Path(attr.file_name).suffix or ".jpg"
+                            break
+                        elif hasattr(attr, 'mime_type'):
+                            if 'image/jpeg' in getattr(attr, 'mime_type', ''):
+                                file_extension = ".jpg"
+                            elif 'image/png' in getattr(attr, 'mime_type', ''):
+                                file_extension = ".png"
+                            elif 'image/gif' in getattr(attr, 'mime_type', ''):
+                                file_extension = ".gif"
+                            elif 'image/webp' in getattr(attr, 'mime_type', ''):
+                                file_extension = ".webp"
+            else:
+                logger.warning(f"Unsupported media type: {type(message.media)}")
+                return None
+            
+            # Create temp file path
+            temp_filename = f"news_media_{timestamp}_{media_hash}{file_extension}"
+            temp_media_path = TEMP_MEDIA_DIR / temp_filename
+            
+            # Download media
+            logger.info(f"💾 Downloading to: {temp_media_path}")
+            downloaded_path = await self.client_manager.client.download_media(
+                message.media,
+                file=str(temp_media_path)
+            )
+            
+            if downloaded_path and Path(downloaded_path).exists():
+                # Check file size
+                file_size_mb = Path(downloaded_path).stat().st_size / (1024 * 1024)
+                if file_size_mb > MAX_MEDIA_SIZE_MB:
+                    logger.warning(f"Media file too large: {file_size_mb:.2f}MB > {MAX_MEDIA_SIZE_MB}MB")
+                    Path(downloaded_path).unlink()
+                    return None
+                
+                logger.info(f"✅ Media downloaded successfully: {downloaded_path} ({file_size_mb:.2f}MB)")
+                return Path(downloaded_path)
+            else:
+                logger.error("❌ Failed to download media")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error downloading media: {e}")
+            return None
+
+    async def _cleanup_media_delayed(self, media_path, delay=None):
+        """Clean up media file after delay."""
+        try:
+            if delay is None:
+                delay = MEDIA_CLEANUP_DELAY
+            
+            logger.info(f"⏰ Scheduling media cleanup in {delay} seconds: {media_path}")
+            await asyncio.sleep(delay)
+            
+            if media_path.exists():
+                media_path.unlink()
+                logger.info(f"🧹 Cleaned up media file: {media_path}")
+            else:
+                logger.debug(f"Media file already removed: {media_path}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to cleanup media file {media_path}: {e}")
+
+    async def cleanup_all_temp_media(self):
+        """Clean up all temporary media files."""
+        try:
+            if not TEMP_MEDIA_DIR.exists():
+                return
+            
+            cleaned_count = 0
+            current_time = time.time()
+            
+            for media_file in TEMP_MEDIA_DIR.glob("news_media_*"):
+                try:
+                    # Check if file is old enough to clean (older than cleanup delay)
+                    file_age = current_time - media_file.stat().st_mtime
+                    if file_age > MEDIA_CLEANUP_DELAY:
+                        media_file.unlink()
+                        cleaned_count += 1
+                        logger.debug(f"🧹 Cleaned old media: {media_file}")
+                except Exception as e:
+                    logger.warning(f"Error cleaning media file {media_file}: {e}")
+            
+            if cleaned_count > 0:
+                logger.info(f"🧹 Cleaned {cleaned_count} old media files")
+                
+        except Exception as e:
+            logger.error(f"Error in media cleanup: {e}")
 
     async def process_news_messages(self, channel_username):
         """Process news messages from a channel with financial focus."""
@@ -333,7 +505,7 @@ class NewsHandler:
             
             channel_entity = await self.client_manager.client.get_entity(channel_username)
             
-            # Get recent messages (last 6 hours - reduced from 12)
+            # Get recent messages (last 6 hours from config)
             from config.settings import MESSAGE_LOOKBACK_HOURS
             cutoff_time = datetime.now() - timedelta(hours=MESSAGE_LOOKBACK_HOURS)
             
@@ -343,7 +515,7 @@ class NewsHandler:
             
             logger.info(f"📥 Retrieving recent messages from {channel_username}")
             
-            # CORRECT - uses setting (reduced from 50 to 30):
+            # Use setting from config (30 messages)
             from config.settings import MAX_MESSAGES_PER_CHECK
             async for message in self.client_manager.client.iter_messages(channel_entity, limit=MAX_MESSAGES_PER_CHECK):
                 try:
@@ -419,7 +591,7 @@ class NewsHandler:
                         
                         # Handle media (only for first segment)
                         media = None
-                        if i == 0 and message.media:
+                        if i == 0 and message.media and ENABLE_MEDIA_PROCESSING:
                             media = self._extract_media_info(message, channel_username)
                         
                         # Send for approval with rate limiting
@@ -466,26 +638,50 @@ class NewsHandler:
             return False
 
     def _extract_media_info(self, message, channel_username):
-        """Extract media information from message."""
+        """Extract comprehensive media information from message."""
         try:
             if isinstance(message.media, MessageMediaPhoto):
                 return {
                     "type": "photo",
                     "media_id": message.media.photo.id,
                     "message_id": message.id,
-                    "channel": channel_username
+                    "channel": channel_username.replace('@', ''),
+                    "file_size": getattr(message.media.photo, 'file_size', 0),
+                    "has_spoiler": getattr(message.media, 'spoiler', False)
                 }
             elif isinstance(message.media, MessageMediaDocument):
                 document = message.media.document
+                
+                # Extract file info
+                file_name = None
+                mime_type = None
+                is_image = False
+                
+                if hasattr(document, 'attributes'):
+                    for attr in document.attributes:
+                        if hasattr(attr, 'file_name') and attr.file_name:
+                            file_name = attr.file_name
+                        if hasattr(attr, 'mime_type'):
+                            mime_type = attr.mime_type
+                            is_image = mime_type.startswith('image/')
+                
                 # Check if it's an image document
-                if any(hasattr(attr, 'mime_type') and attr.mime_type.startswith('image/') 
-                       for attr in document.attributes):
+                if document.mime_type and document.mime_type.startswith('image/'):
+                    is_image = True
+                    mime_type = document.mime_type
+                
+                if is_image:
                     return {
-                        "type": "document",
+                        "type": "document_image",
                         "media_id": document.id,
                         "message_id": message.id,
-                        "channel": channel_username
+                        "channel": channel_username.replace('@', ''),
+                        "file_name": file_name,
+                        "mime_type": mime_type,
+                        "file_size": getattr(document, 'size', 0),
+                        "has_spoiler": getattr(message.media, 'spoiler', False)
                     }
+                    
         except Exception as e:
             logger.warning(f"Error extracting media info: {e}")
         
@@ -545,7 +741,7 @@ class NewsHandler:
             return None
 
     async def _send_approval_message(self, news_text, media, source_channel, analysis, approval_id):
-        """Internal method to send approval message with inline keyboard."""
+        """Internal method to send approval message with clickable commands."""
         try:
             # Get admin bot entity
             admin_bot_entity = await self.get_admin_bot_entity()
@@ -575,31 +771,21 @@ class NewsHandler:
                 f"{analysis_info}"
                 f"{'📎 Has Media' if media else '📝 Text Only'}\n\n"
                 f"<b>Content:</b>\n"
-                f"{news_text}"
+                f"{news_text}\n\n"
+                f"➡️ To approve: /submit{approval_id}\n"
+                f"➡️ To reject: /reject{approval_id}"
             )
             
-            # Create inline keyboard with beautiful buttons
-            keyboard = [
-                [
-                    Button.inline("✅ APPROVE", f"approve_{approval_id}"),
-                    Button.inline("🚫 REJECT", f"reject_{approval_id}")
-                ],
-                [
-                    Button.inline("📋 Copy ID", f"copy_{approval_id}")
-                ]
-            ]
-            
-            # Send message with inline keyboard
+            # Send message without inline keyboard (clickable commands work better)
             message = await self.client_manager.client.send_message(
                 admin_bot_entity,
                 approval_message,
-                parse_mode='html',
-                buttons=keyboard
+                parse_mode='html'
             )
             
             if message:
                 self.approval_stats['sent'] += 1
-                logger.info(f"📤 Rate-limited approval sent with inline buttons: {approval_id}")
+                logger.info(f"📤 Rate-limited approval sent with clickable commands: {approval_id}")
                 return True
             else:
                 logger.error("❌ Failed to send approval message")
@@ -639,7 +825,7 @@ class NewsHandler:
             return None
 
     async def load_pending_news(self):
-        """Load pending news from state file."""
+        """Load pending news from state file and cleanup old media."""
         try:
             if self.state_file.exists():
                 with open(self.state_file, 'r', encoding='utf-8') as f:
@@ -651,6 +837,11 @@ class NewsHandler:
                 logger.info(f"📂 Loaded {len(self.pending_news)} pending news items")
             else:
                 logger.info("📂 No existing state file found, starting fresh")
+            
+            # Clean up any orphaned media files on startup
+            if MEDIA_SUPPORT and ENABLE_MEDIA_PROCESSING and MEDIA_CLEANUP_ENABLED:
+                await self.cleanup_all_temp_media()
+                logger.info("🧹 Startup media cleanup completed")
                 
         except Exception as e:
             logger.error(f"❌ Error loading pending news: {e}")
@@ -739,7 +930,8 @@ class NewsHandler:
             'approval_rate': (self.stats.get('news_approved', 0) / 
                             max(1, self.stats.get('news_sent_for_approval', 1))) * 100,
             'detection_rate': (self.stats.get('news_detected', 0) / 
-                             max(1, self.stats.get('messages_processed', 1))) * 100
+                             max(1, self.stats.get('messages_processed', 1))) * 100,
+            'media_support': MEDIA_SUPPORT and ENABLE_MEDIA_PROCESSING
         }
 
     async def force_process_recent_messages(self, channel_username, num_messages=5):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Complete main.py for Financial News Detector Bot.
-Keeps running to handle approval commands and has proper Ctrl+C handling.
+Updated with Persian calendar, media handling, and new schedule (8:30 AM - 10:00 PM).
 """
 import asyncio
 import logging
@@ -20,11 +20,12 @@ try:
     from src.handlers.news_handler import NewsHandler
     from src.client.telegram_client import TelegramClientManager
     from src.utils.logger import setup_logging
-    from src.utils.time_utils import is_operating_hours, get_current_time
+    from src.utils.time_utils import is_operating_hours, get_current_time, log_time_status
     from config.credentials import validate_credentials
     from config.settings import (
         NEWS_CHECK_INTERVAL, NEWS_CHANNEL, TWITTER_NEWS_CHANNEL, 
-        TARGET_CHANNEL_ID, OPERATION_START_HOUR, OPERATION_END_HOUR
+        TARGET_CHANNEL_ID, OPERATION_START_HOUR, OPERATION_START_MINUTE,
+        OPERATION_END_HOUR, OPERATION_END_MINUTE, ENABLE_MEDIA_PROCESSING
     )
     print("✅ All imports successful")
 except ImportError as e:
@@ -34,7 +35,7 @@ except ImportError as e:
 
 # Set up logging
 logger = setup_logging()
-logger.info("🚀 Starting Financial News Detector Bot...")
+logger.info("🚀 Starting Financial News Detector Bot with Persian Calendar Support...")
 
 # Global shutdown flag
 should_exit = False
@@ -55,6 +56,10 @@ def parse_args():
                         help='Enable debug mode')
     parser.add_argument('--stats', action='store_true',
                         help='Show current statistics and exit')
+    parser.add_argument('--test-persian', action='store_true',
+                        help='Test Persian calendar functionality')
+    parser.add_argument('--test-media', action='store_true',
+                        help='Test media handling functionality')
     return parser.parse_args()
 
 def signal_handler(sig, frame):
@@ -72,7 +77,7 @@ signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
 signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
 
 class FinancialNewsBot:
-    """Complete financial news detector bot."""
+    """Complete financial news detector bot with Persian calendar and media support."""
 
     def __init__(self, force_24h=False, debug_mode=False):
         """Initialize the financial news bot."""
@@ -91,6 +96,7 @@ class FinancialNewsBot:
             'news_sent_for_approval': 0,
             'news_approved': 0,
             'news_published': 0,
+            'media_processed': 0,
             'errors': 0,
             'start_time': None
         }
@@ -102,7 +108,7 @@ class FinancialNewsBot:
 
     async def start(self):
         """Start the financial news bot."""
-        logger.info("⚙️ Initializing Financial News Bot...")
+        logger.info("⚙️ Initializing Financial News Bot with Persian Calendar...")
         
         try:
             # Validate credentials first
@@ -120,7 +126,7 @@ class FinancialNewsBot:
             logger.info("📰 Initializing news handler...")
             self.news_handler = NewsHandler(self.client_manager)
             
-            # Initialize the news handler with Bot API
+            # Initialize the news handler with Bot API and media support
             if hasattr(self.news_handler, 'initialize'):
                 await self.news_handler.initialize()
 
@@ -143,6 +149,10 @@ class FinancialNewsBot:
 
             logger.info("🎉 Financial News Bot started successfully!")
             logger.info("🔄 Bot is now running and ready to handle approval commands...")
+            logger.info("📅 Persian calendar timestamps enabled")
+            if ENABLE_MEDIA_PROCESSING:
+                logger.info("📎 Media handling enabled")
+            
             return True
 
         except Exception as e:
@@ -159,15 +169,20 @@ class FinancialNewsBot:
         logger.info("=" * 60)
         logger.info(f"🎯 Target Channel: {TARGET_CHANNEL_ID}")
         logger.info(f"📺 News Channels: {NEWS_CHANNEL}, {TWITTER_NEWS_CHANNEL}")
-        logger.info(f"⏰ Check Interval: {NEWS_CHECK_INTERVAL}s")
-        logger.info(f"🕐 Operating Hours: {OPERATION_START_HOUR}:00 - {OPERATION_END_HOUR}:00 Tehran")
+        logger.info(f"⏰ Check Interval: {NEWS_CHECK_INTERVAL}s ({NEWS_CHECK_INTERVAL//60} minutes)")
+        logger.info(f"🕐 Operating Hours: {OPERATION_START_HOUR:02d}:{OPERATION_START_MINUTE:02d} - {OPERATION_END_HOUR:02d}:{OPERATION_END_MINUTE:02d} Tehran")
+        logger.info(f"🗓️ Persian Calendar: Enabled")
+        logger.info(f"📎 Media Processing: {'Enabled' if ENABLE_MEDIA_PROCESSING else 'Disabled'}")
         logger.info(f"🌐 24h Mode: {'Enabled' if self.force_24h else 'Disabled'}")
         logger.info(f"🐛 Debug Mode: {'Enabled' if self.debug_mode else 'Disabled'}")
         logger.info(f"💰 Focus: Gold, Currencies, Iranian Economy, Oil, Crypto")
+        
+        # Log current time status
+        log_time_status()
         logger.info("=" * 60)
 
     async def run_continuous_monitoring(self):
-        """Main continuous monitoring loop."""
+        """Main continuous monitoring loop with Persian calendar support."""
         logger.info("🔄 Starting continuous news monitoring...")
         logger.info("💡 The bot will now keep running to handle approval commands")
         logger.info("💡 Use Ctrl+C to stop the bot gracefully")
@@ -184,6 +199,7 @@ class FinancialNewsBot:
                     if not self.force_24h and not is_operating_hours():
                         if current_time - last_status_log >= 3600:  # Log every hour when outside hours
                             logger.info("💤 Outside operating hours, bot is idle but ready for approvals...")
+                            logger.info("🕐 Use Persian calendar format for timestamps")
                             last_status_log = current_time
                         await asyncio.sleep(300)  # Check every 5 minutes when outside hours
                         continue
@@ -264,18 +280,84 @@ class FinancialNewsBot:
             self.stats['errors'] += 1
 
     async def _log_status(self):
-        """Log current bot status."""
+        """Log current bot status with Persian calendar."""
         if self.start_time:
             uptime = int(time.time() - self.start_time)
             pending_count = len(self.news_handler.pending_news) if self.news_handler else 0
             
-            logger.info(f"📊 STATUS - Uptime: {uptime}s | "
-                       f"News Processed: {self.stats['news_processed']} | "
-                       f"Pending Approvals: {pending_count} | "
-                       f"Errors: {self.stats['errors']}")
+            # Get current Persian time
+            from src.utils.time_utils import get_formatted_time
+            persian_time = get_formatted_time(format_type="persian_full")
+            
+            logger.info(f"📊 STATUS - Persian Time: {persian_time}")
+            logger.info(f"📊 Uptime: {uptime}s | News Processed: {self.stats['news_processed']} | "
+                       f"Pending Approvals: {pending_count} | Errors: {self.stats['errors']}")
             
             if pending_count > 0:
                 logger.info(f"⏳ {pending_count} news items waiting for approval")
+            
+            if ENABLE_MEDIA_PROCESSING:
+                logger.info(f"📎 Media processed: {self.stats.get('media_processed', 0)}")
+
+    async def test_persian_calendar(self):
+        """Test Persian calendar functionality."""
+        logger.info("🗓️ Testing Persian Calendar Functionality...")
+        
+        from src.utils.time_utils import (
+            get_current_time, get_formatted_time, format_persian_date,
+            format_persian_time, format_persian_datetime
+        )
+        
+        current_time = get_current_time()
+        
+        logger.info(f"Current Tehran Time: {current_time}")
+        logger.info(f"Persian Full Format: {get_formatted_time(current_time, 'persian_full')}")
+        logger.info(f"Persian Date: {format_persian_date(current_time)}")
+        logger.info(f"Persian Time: {format_persian_time(current_time)}")
+        logger.info(f"Persian DateTime: {format_persian_datetime(current_time)}")
+        
+        # Test message format
+        test_message = "📈 تست خبر مالی"
+        from src.utils.time_utils import add_timestamp_to_message
+        formatted_message = add_timestamp_to_message(test_message)
+        
+        logger.info("Sample formatted message:")
+        logger.info("-" * 30)
+        logger.info(formatted_message)
+        logger.info("-" * 30)
+
+    async def test_media_functionality(self):
+        """Test media handling functionality."""
+        logger.info("📎 Testing Media Functionality...")
+        
+        if not ENABLE_MEDIA_PROCESSING:
+            logger.warning("❌ Media processing is disabled in configuration")
+            return
+        
+        try:
+            # Test media directory creation
+            from config.settings import MEDIA_DIR, TEMP_MEDIA_DIR
+            logger.info(f"Media Directory: {MEDIA_DIR}")
+            logger.info(f"Temp Media Directory: {TEMP_MEDIA_DIR}")
+            logger.info(f"Media Dir Exists: {'✅' if MEDIA_DIR.exists() else '❌'}")
+            logger.info(f"Temp Media Dir Exists: {'✅' if TEMP_MEDIA_DIR.exists() else '❌'}")
+            
+            # Test write permissions
+            test_file = TEMP_MEDIA_DIR / "test_write.txt"
+            try:
+                test_file.write_text("test")
+                test_file.unlink()
+                logger.info("Write Permission: ✅")
+            except Exception as e:
+                logger.error(f"Write Permission: ❌ ({e})")
+            
+            # Test media cleanup
+            if hasattr(self.news_handler, 'cleanup_all_temp_media'):
+                await self.news_handler.cleanup_all_temp_media()
+                logger.info("✅ Media cleanup test completed")
+            
+        except Exception as e:
+            logger.error(f"❌ Media functionality test failed: {e}")
 
     async def test_financial_news_detection(self, news_text=None, channel=None):
         """Test financial news detection functionality."""
@@ -351,13 +433,26 @@ class FinancialNewsBot:
                     is_relevant, score = True, 3
                 
                 if is_relevant:
-                    # Test sending to approval bot
-                    logger.info("📤 Testing approval bot sending...")
-                    approval_id = await self.news_handler.send_to_approval_bot(cleaned)
+                    # Test sending to approval bot with Persian calendar
+                    logger.info("📤 Testing approval bot sending with Persian calendar...")
+                    approval_id = await self.news_handler.send_to_approval_bot_rate_limited(
+                        cleaned, None, "test_channel",
+                        {'score': score, 'topics': topics[:3]}
+                    )
                     if approval_id:
                         logger.info(f"✅ Financial news sent for approval with ID: {approval_id}")
                         logger.info(f"💡 To approve, send to your admin bot: /submit{approval_id}")
                         self.stats['news_sent_for_approval'] += 1
+                        
+                        # Show how it will look when published (with Persian calendar)
+                        from src.utils.time_utils import get_formatted_time
+                        persian_time = get_formatted_time(format_type="persian_full")
+                        sample_published = f"{cleaned}\n📡 @anilnewsonline\n🕐 {persian_time}"
+                        
+                        logger.info("📢 Sample published format:")
+                        logger.info("-" * 30)
+                        logger.info(sample_published)
+                        logger.info("-" * 30)
                     else:
                         logger.error("❌ Failed to send financial news for approval")
                 else:
@@ -371,6 +466,11 @@ class FinancialNewsBot:
         """Show current statistics."""
         logger.info("📊 CURRENT FINANCIAL NEWS STATISTICS")
         logger.info("=" * 50)
+        
+        # Show current Persian time
+        from src.utils.time_utils import get_formatted_time
+        persian_time = get_formatted_time(format_type="persian_full")
+        logger.info(f"🗓️ Current Persian Time: {persian_time}")
         
         if self.start_time:
             uptime = int(time.time() - self.start_time)
@@ -391,6 +491,12 @@ class FinancialNewsBot:
                 for i, (news_id, news_data) in enumerate(list(self.news_handler.pending_news.items())[:3]):
                     text_preview = news_data.get('text', '')[:80]
                     logger.info(f"   {i+1}. ID: {news_id} - {text_preview}...")
+        
+        # Show media statistics if enabled
+        if ENABLE_MEDIA_PROCESSING:
+            logger.info(f"📎 Media Processing: Enabled")
+            if hasattr(self.news_handler, 'cleanup_all_temp_media'):
+                logger.info("🧹 Media cleanup: Available")
 
     async def stop(self):
         """Stop the bot gracefully."""
@@ -402,6 +508,12 @@ class FinancialNewsBot:
             if self.news_handler and hasattr(self.news_handler, 'save_pending_news'):
                 await self.news_handler.save_pending_news()
                 logger.info("💾 News state saved")
+            
+            # Clean up media files
+            if (self.news_handler and hasattr(self.news_handler, 'cleanup_all_temp_media') 
+                and ENABLE_MEDIA_PROCESSING):
+                await self.news_handler.cleanup_all_temp_media()
+                logger.info("🧹 Media cleanup completed")
             
             # Stop client
             if self.client_manager:
@@ -435,6 +547,16 @@ async def main():
         if args.stats:
             # Show statistics and exit
             await bot_instance.show_statistics()
+            return 0
+
+        if args.test_persian:
+            # Test Persian calendar functionality
+            await bot_instance.test_persian_calendar()
+            return 0
+
+        if args.test_media:
+            # Test media functionality
+            await bot_instance.test_media_functionality()
             return 0
 
         if args.test_news:
