@@ -1,6 +1,7 @@
 """
-Complete news handler with financial focus, approval workflow, image handling, and clickable commands.
+Complete news handler with financial focus, approval workflow, image handling, and auto-delete.
 Handles news detection, filtering, approval, publishing with media support, and cleanup.
+FIXED: Auto-deletes admin messages and properly handles images.
 """
 import asyncio
 import hashlib
@@ -113,6 +114,9 @@ class NewsHandler:
         self.processed_messages = set()
         self.admin_bot_entity = None
         
+        # Track admin message IDs for deletion
+        self.admin_message_map = {}  # approval_id -> message_id
+        
         # Add rate limiter
         self.rate_limiter = SimpleRateLimiter(min_delay=8, max_queue_size=30)
         self.approval_stats = {
@@ -199,7 +203,7 @@ class NewsHandler:
             return False
 
     async def _process_approval(self, approval_id, event):
-        """Process approval request."""
+        """Process approval request with message deletion."""
         logger.info(f"📥 Received approval for: {approval_id}")
         
         # Check if we have this pending news
@@ -230,6 +234,31 @@ class NewsHandler:
             del self.pending_news[approval_id]
             await self.save_pending_news()
             
+            # Delete the original approval message to save space
+            try:
+                # Delete the command message
+                await event.delete()
+                logger.info(f"🗑️ Deleted approval command for {approval_id}")
+                
+                # Also delete the original approval message if we have its ID
+                if approval_id in self.admin_message_map:
+                    message_id = self.admin_message_map[approval_id]
+                    admin_bot = await self.get_admin_bot_entity()
+                    if admin_bot:
+                        try:
+                            # Delete the original message with news content
+                            await self.client_manager.client.delete_messages(
+                                admin_bot, 
+                                message_ids=[message_id]
+                            )
+                            logger.info(f"🗑️ Deleted original approval message {message_id}")
+                            del self.admin_message_map[approval_id]
+                        except Exception as del_error:
+                            logger.warning(f"Could not delete original message: {del_error}")
+                            
+            except Exception as e:
+                logger.warning(f"Could not delete messages: {e}")
+            
         else:
             # Failure response
             error_text = f"❌ Failed to publish news {approval_id}. Please try again or contact support."
@@ -238,7 +267,7 @@ class NewsHandler:
             logger.error(f"❌ Failed to publish approved news: {approval_id}")
 
     async def _process_rejection(self, approval_id, event):
-        """Process rejection request."""
+        """Process rejection request with message deletion."""
         logger.info(f"🚫 Received rejection for: {approval_id}")
         
         if approval_id in self.pending_news:
@@ -251,17 +280,36 @@ class NewsHandler:
             await event.respond(response_text)
             
             logger.info(f"🚫 News {approval_id} rejected and removed")
+            
+            # Delete the messages to save space
+            try:
+                # Delete the command message
+                await event.delete()
+                logger.info(f"🗑️ Deleted rejection command for {approval_id}")
+                
+                # Also delete the original approval message if we have its ID
+                if approval_id in self.admin_message_map:
+                    message_id = self.admin_message_map[approval_id]
+                    admin_bot = await self.get_admin_bot_entity()
+                    if admin_bot:
+                        try:
+                            await self.client_manager.client.delete_messages(
+                                admin_bot,
+                                message_ids=[message_id]
+                            )
+                            logger.info(f"🗑️ Deleted original approval message {message_id}")
+                            del self.admin_message_map[approval_id]
+                        except Exception as del_error:
+                            logger.warning(f"Could not delete original message: {del_error}")
+                            
+            except Exception as e:
+                logger.warning(f"Could not delete messages: {e}")
         else:
             await event.respond(f"❌ News item {approval_id} not found")
 
     async def publish_approved_news(self, news_data):
-        """Publish approved news to the target channel with media support and Persian calendar format."""
-        temp_media_path = None
+        """Publish approved news to the target channel with proper media support."""
         try:
-            if not self.bot_api:
-                logger.error("❌ Bot API not available for publishing")
-                return False
-            
             # Get formatted text
             formatted_text = news_data.get('formatted_text', news_data['text'])
             
@@ -285,82 +333,93 @@ class NewsHandler:
             
             logger.info(f"📤 Attempting to publish to channel {TARGET_CHANNEL_ID}")
             
-            # Handle media if present and media support is available
+            # Try to publish with media using Telethon client (more reliable for media)
             media_info = news_data.get('media')
-            if (MEDIA_SUPPORT and ENABLE_MEDIA_PROCESSING and 
-                media_info and news_data.get('has_media')):
-                
-                # Download media first
-                temp_media_path = await self._download_media_for_publishing(media_info)
-                
-                if temp_media_path and temp_media_path.exists():
-                    logger.info(f"📎 Publishing with media: {temp_media_path}")
+            published = False
+            
+            if media_info and news_data.get('has_media'):
+                try:
+                    # Get the source channel and message
+                    channel_name = media_info['channel']
+                    message_id = media_info['message_id']
                     
-                    # Publish with media using Bot API
-                    async with self.bot_api as api_client:
-                        if (media_info.get('type') == 'photo' or 
-                            temp_media_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                            # Send as photo
-                            result = await api_client.send_photo(
-                                chat_id=TARGET_CHANNEL_ID,
-                                photo=temp_media_path,
-                                caption=formatted_text,
-                                parse_mode='HTML'
-                            )
+                    if not channel_name.startswith('@'):
+                        channel_name = f"@{channel_name}"
+                    
+                    logger.info(f"📥 Getting media from {channel_name}, message {message_id}")
+                    
+                    # Get channel entity
+                    channel_entity = await self.client_manager.client.get_entity(channel_name)
+                    
+                    # Get the original message with media
+                    original_message = await self.client_manager.client.get_messages(
+                        channel_entity, 
+                        ids=message_id
+                    )
+                    
+                    if original_message and original_message.media:
+                        # Send to target channel with media
+                        logger.info(f"📎 Publishing with media to channel")
+                        
+                        result = await self.client_manager.client.send_message(
+                            TARGET_CHANNEL_ID,
+                            formatted_text,
+                            parse_mode='html',
+                            file=original_message.media  # Attach the media directly
+                        )
+                        
+                        if result:
+                            logger.info(f"📢 Financial news with media published to channel {TARGET_CHANNEL_ID}")
+                            logger.info(f"🆔 Published message ID: {result.id}")
+                            published = True
                         else:
-                            # Send as document
-                            result = await api_client.send_document(
-                                chat_id=TARGET_CHANNEL_ID,
-                                document=temp_media_path,
-                                caption=formatted_text,
-                                parse_mode='HTML'
-                            )
+                            logger.warning("Failed to publish with media, trying text-only")
+                    else:
+                        logger.warning(f"No media found in original message {message_id}")
+                        
+                except Exception as media_error:
+                    logger.error(f"Error publishing with media: {media_error}")
+                    # Fall back to text-only
+            
+            # If not published with media, try text-only
+            if not published:
+                try:
+                    # Try with Telethon first
+                    result = await self.client_manager.client.send_message(
+                        TARGET_CHANNEL_ID,
+                        formatted_text,
+                        parse_mode='html'
+                    )
                     
                     if result:
-                        logger.info(f"📢 Financial news with media published to channel {TARGET_CHANNEL_ID}")
-                        logger.info(f"🆔 Published message ID: {result.get('message_id', 'Unknown')}")
-                        
-                        # Schedule media cleanup
-                        if MEDIA_CLEANUP_ENABLED:
-                            asyncio.create_task(self._cleanup_media_delayed(temp_media_path))
-                        
-                        return True
-                    else:
-                        logger.error("❌ Failed to publish news with media via Bot API")
-                        return False
-                else:
-                    logger.warning("⚠️ Failed to download media, publishing text only")
-                    # Fall through to text-only publishing
+                        logger.info(f"📢 Financial news published to channel (text-only)")
+                        logger.info(f"🆔 Published message ID: {result.id}")
+                        published = True
+                except Exception as telethon_error:
+                    logger.warning(f"Telethon send failed: {telethon_error}")
+                    
+                    # Try Bot API as fallback
+                    if self.bot_api:
+                        try:
+                            async with self.bot_api as api_client:
+                                result = await api_client.send_message(
+                                    chat_id=TARGET_CHANNEL_ID,
+                                    text=formatted_text,
+                                    parse_mode='HTML'
+                                )
+                            
+                            if result:
+                                logger.info(f"📢 News published via Bot API (fallback)")
+                                published = True
+                        except Exception as bot_error:
+                            logger.error(f"Bot API also failed: {bot_error}")
             
-            # Publish text-only message
-            async with self.bot_api as api_client:
-                result = await api_client.send_message(
-                    chat_id=TARGET_CHANNEL_ID,
-                    text=formatted_text,
-                    parse_mode='HTML'
-                )
-            
-            if result:
-                logger.info(f"📢 Financial news published to channel {TARGET_CHANNEL_ID}")
-                logger.info(f"🆔 Published message ID: {result.get('message_id', 'Unknown')}")
-                return True
-            else:
-                logger.error("❌ Failed to publish news via Bot API")
-                return False
+            return published
                 
         except Exception as e:
             logger.error(f"❌ Error publishing approved news: {e}")
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
-            
-            # Clean up media on error
-            if temp_media_path and temp_media_path.exists() and MEDIA_CLEANUP_ENABLED:
-                try:
-                    temp_media_path.unlink()
-                    logger.info(f"🧹 Cleaned up media after error: {temp_media_path}")
-                except Exception as cleanup_error:
-                    logger.warning(f"Failed to cleanup media: {cleanup_error}")
-            
             return False
 
     async def _download_media_for_publishing(self, media_info):
@@ -741,7 +800,7 @@ class NewsHandler:
             return None
 
     async def _send_approval_message(self, news_text, media, source_channel, analysis, approval_id):
-        """Internal method to send approval message with clickable commands."""
+        """Internal method to send approval message with media and clickable commands."""
         try:
             # Get admin bot entity
             admin_bot_entity = await self.get_admin_bot_entity()
@@ -776,16 +835,82 @@ class NewsHandler:
                 f"➡️ To reject: /reject{approval_id}"
             )
             
-            # Send message without inline keyboard (clickable commands work better)
-            message = await self.client_manager.client.send_message(
-                admin_bot_entity,
-                approval_message,
-                parse_mode='html'
-            )
+            # Send message with media if available
+            message = None
+            
+            # If media exists, try to send it with the approval message
+            if media and media.get('channel') and media.get('message_id'):
+                try:
+                    logger.info(f"📥 Attempting to send approval with media from {media['channel']}")
+                    
+                    # Get the source channel and message
+                    channel_name = media['channel']
+                    if not channel_name.startswith('@'):
+                        channel_name = f"@{channel_name}"
+                    
+                    # Get channel entity
+                    channel_entity = await self.client_manager.client.get_entity(channel_name)
+                    
+                    # Get the original message with media
+                    original_message = await self.client_manager.client.get_messages(
+                        channel_entity, 
+                        ids=media['message_id']
+                    )
+                    
+                    if original_message and original_message.media:
+                        # Send message with media
+                        logger.info(f"📎 Sending approval with media to admin bot")
+                        
+                        message = await self.client_manager.client.send_message(
+                            admin_bot_entity,
+                            approval_message,
+                            parse_mode='html',
+                            file=original_message.media  # Attach the media directly
+                        )
+                        
+                        if message:
+                            logger.info(f"✅ Approval sent with media: {approval_id}")
+                            # Store message ID for deletion later
+                            self.admin_message_map[approval_id] = message.id
+                    else:
+                        logger.warning(f"No media found in original message, sending text only")
+                        # Send without media
+                        message = await self.client_manager.client.send_message(
+                            admin_bot_entity,
+                            approval_message,
+                            parse_mode='html'
+                        )
+                        if message:
+                            self.admin_message_map[approval_id] = message.id
+                        
+                except Exception as media_error:
+                    logger.warning(f"Could not send media with approval: {media_error}")
+                    # Fall back to text-only
+                    message = await self.client_manager.client.send_message(
+                        admin_bot_entity,
+                        approval_message,
+                        parse_mode='html'
+                    )
+                    if message:
+                        self.admin_message_map[approval_id] = message.id
+            else:
+                # Send text-only message
+                message = await self.client_manager.client.send_message(
+                    admin_bot_entity,
+                    approval_message,
+                    parse_mode='html'
+                )
+                if message:
+                    self.admin_message_map[approval_id] = message.id
             
             if message:
                 self.approval_stats['sent'] += 1
-                logger.info(f"📤 Rate-limited approval sent with clickable commands: {approval_id}")
+                logger.info(f"📤 Approval sent with ID: {approval_id}, Message ID: {message.id}")
+                
+                # Store the message ID in pending news for backup
+                if approval_id in self.pending_news:
+                    self.pending_news[approval_id]['admin_message_id'] = message.id
+                
                 return True
             else:
                 logger.error("❌ Failed to send approval message")
@@ -833,6 +958,7 @@ class NewsHandler:
                     self.pending_news = data.get('pending_news', {})
                     self.processed_messages = set(data.get('processed_messages', []))
                     self.stats.update(data.get('stats', {}))
+                    self.admin_message_map = data.get('admin_message_map', {})
                 
                 logger.info(f"📂 Loaded {len(self.pending_news)} pending news items")
             else:
@@ -847,6 +973,7 @@ class NewsHandler:
             logger.error(f"❌ Error loading pending news: {e}")
             self.pending_news = {}
             self.processed_messages = set()
+            self.admin_message_map = {}
 
     async def save_pending_news(self):
         """Save pending news to state file."""
@@ -855,6 +982,7 @@ class NewsHandler:
                 'pending_news': self.pending_news,
                 'processed_messages': list(self.processed_messages),
                 'stats': self.stats,
+                'admin_message_map': self.admin_message_map,
                 'last_updated': time.time()
             }
             
@@ -882,6 +1010,9 @@ class NewsHandler:
             # Remove expired items
             for news_id in expired_ids:
                 del self.pending_news[news_id]
+                # Also remove from message map
+                if news_id in self.admin_message_map:
+                    del self.admin_message_map[news_id]
             
             if expired_ids:
                 logger.info(f"🧹 Cleaned {len(expired_ids)} expired pending news items")
@@ -889,6 +1020,22 @@ class NewsHandler:
                 
         except Exception as e:
             logger.error(f"❌ Error cleaning expired pending news: {e}")
+
+    def split_news_segments(self, text):
+        """Split combined news messages into segments."""
+        if not text:
+            return [text]
+        
+        # Look for news separators
+        separators = ['---', '===', '***', '░░░', '▫️▫️', '◦◦◦', '━━━', '▬▬▬']
+        
+        for sep in separators:
+            if sep in text:
+                segments = [seg.strip() for seg in text.split(sep)]
+                return [seg for seg in segments if len(seg.strip()) >= 30]
+        
+        # No separators found
+        return [text]
 
     def get_approval_stats(self):
         """Get approval processing statistics."""
@@ -963,9 +1110,15 @@ class NewsHandler:
                         if is_relevant:
                             # Process without duplicate checking
                             cleaned = self.news_detector.clean_news_text(message.text)
+                            
+                            # Extract media if present
+                            media = None
+                            if message.media:
+                                media = self._extract_media_info(message, channel_username)
+                            
                             approval_id = await self.send_to_approval_bot_rate_limited(
                                 cleaned, 
-                                None, 
+                                media, 
                                 channel_username.replace('@', ''),
                                 {'score': score, 'topics': topics}
                             )
