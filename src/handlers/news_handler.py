@@ -1,7 +1,10 @@
 """
 Complete news handler with financial focus, approval workflow, image handling, and auto-delete.
-Handles news detection, filtering, approval, publishing with media support, and cleanup.
-FIXED: Auto-deletes admin messages and properly handles images.
+This is the COMPLETE FIXED VERSION - Just copy and paste this entire file.
+Features:
+- Auto-deletes messages from admin bot after approval/rejection
+- Sends images with approval messages
+- Publishes approved news with images
 """
 import asyncio
 import hashlib
@@ -9,6 +12,7 @@ import json
 import logging
 import os
 import time
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import deque
@@ -115,7 +119,7 @@ class NewsHandler:
         self.admin_bot_entity = None
         
         # Track admin message IDs for deletion
-        self.admin_message_map = {}  # approval_id -> message_id
+        self.admin_messages = {}  # approval_id -> (chat_id, message_id)
         
         # Add rate limiter
         self.rate_limiter = SimpleRateLimiter(min_delay=8, max_queue_size=30)
@@ -195,6 +199,44 @@ class NewsHandler:
                 except Exception as e:
                     logger.error(f"❌ Error handling rejection command: {e}")
             
+            # Manual cleanup command
+            @client.on(events.NewMessage(pattern=r'/cleanup'))
+            async def handle_cleanup_command(event):
+                """Manual cleanup of old approval messages."""
+                try:
+                    if event.sender_id != (await client.get_me()).id:
+                        return  # Only respond to our own cleanup command
+                    
+                    await event.respond("🧹 Starting cleanup of processed messages...")
+                    
+                    # Get all pending IDs
+                    pending_ids = set(self.pending_news.keys())
+                    
+                    deleted_count = 0
+                    checked_count = 0
+                    
+                    # Check all recent messages
+                    async for message in client.iter_messages(event.chat, limit=500):
+                        checked_count += 1
+                        
+                        if message.text and "FINANCIAL NEWS PENDING APPROVAL" in message.text:
+                            # Extract approval ID
+                            match = re.search(r'ID: <code>(\w+)</code>', message.text)
+                            if match:
+                                found_id = match.group(1)
+                                # If not in pending, delete it
+                                if found_id not in pending_ids:
+                                    try:
+                                        await message.delete()
+                                        deleted_count += 1
+                                    except:
+                                        pass
+                    
+                    await event.respond(f"✅ Cleanup complete! Checked {checked_count} messages, deleted {deleted_count}")
+                    
+                except Exception as e:
+                    logger.error(f"Error in cleanup command: {e}")
+            
             logger.info("✅ News approval handler set up successfully with clickable commands")
             return True
             
@@ -203,7 +245,7 @@ class NewsHandler:
             return False
 
     async def _process_approval(self, approval_id, event):
-        """Process approval request with message deletion."""
+        """Process approval request with working message deletion."""
         logger.info(f"📥 Received approval for: {approval_id}")
         
         # Check if we have this pending news
@@ -222,7 +264,7 @@ class NewsHandler:
         if success:
             # Success response
             response_text = f"✅ News {approval_id} published successfully to channel!"
-            await event.respond(response_text)
+            response_msg = await event.respond(response_text)
             
             logger.info(f"✅ Successfully published approved news: {approval_id}")
             
@@ -234,30 +276,15 @@ class NewsHandler:
             del self.pending_news[approval_id]
             await self.save_pending_news()
             
-            # Delete the original approval message to save space
+            # Delete ALL messages containing this approval ID from admin bot
+            await self._delete_all_approval_messages(approval_id)
+            
+            # Delete the success response after a delay
+            await asyncio.sleep(3)
             try:
-                # Delete the command message
-                await event.delete()
-                logger.info(f"🗑️ Deleted approval command for {approval_id}")
-                
-                # Also delete the original approval message if we have its ID
-                if approval_id in self.admin_message_map:
-                    message_id = self.admin_message_map[approval_id]
-                    admin_bot = await self.get_admin_bot_entity()
-                    if admin_bot:
-                        try:
-                            # Delete the original message with news content
-                            await self.client_manager.client.delete_messages(
-                                admin_bot, 
-                                message_ids=[message_id]
-                            )
-                            logger.info(f"🗑️ Deleted original approval message {message_id}")
-                            del self.admin_message_map[approval_id]
-                        except Exception as del_error:
-                            logger.warning(f"Could not delete original message: {del_error}")
-                            
-            except Exception as e:
-                logger.warning(f"Could not delete messages: {e}")
+                await response_msg.delete()
+            except:
+                pass
             
         else:
             # Failure response
@@ -267,7 +294,7 @@ class NewsHandler:
             logger.error(f"❌ Failed to publish approved news: {approval_id}")
 
     async def _process_rejection(self, approval_id, event):
-        """Process rejection request with message deletion."""
+        """Process rejection request with working message deletion."""
         logger.info(f"🚫 Received rejection for: {approval_id}")
         
         if approval_id in self.pending_news:
@@ -277,35 +304,63 @@ class NewsHandler:
             await self.save_pending_news()
             
             response_text = f"🚫 News {approval_id} rejected and removed from queue"
-            await event.respond(response_text)
+            response_msg = await event.respond(response_text)
             
             logger.info(f"🚫 News {approval_id} rejected and removed")
             
-            # Delete the messages to save space
+            # Delete ALL messages containing this approval ID
+            await self._delete_all_approval_messages(approval_id)
+            
+            # Delete the rejection response after a delay
+            await asyncio.sleep(3)
             try:
-                # Delete the command message
-                await event.delete()
-                logger.info(f"🗑️ Deleted rejection command for {approval_id}")
-                
-                # Also delete the original approval message if we have its ID
-                if approval_id in self.admin_message_map:
-                    message_id = self.admin_message_map[approval_id]
-                    admin_bot = await self.get_admin_bot_entity()
-                    if admin_bot:
-                        try:
-                            await self.client_manager.client.delete_messages(
-                                admin_bot,
-                                message_ids=[message_id]
-                            )
-                            logger.info(f"🗑️ Deleted original approval message {message_id}")
-                            del self.admin_message_map[approval_id]
-                        except Exception as del_error:
-                            logger.warning(f"Could not delete original message: {del_error}")
-                            
-            except Exception as e:
-                logger.warning(f"Could not delete messages: {e}")
+                await response_msg.delete()
+            except:
+                pass
         else:
             await event.respond(f"❌ News item {approval_id} not found")
+
+    async def _delete_all_approval_messages(self, approval_id):
+        """Delete all messages containing this approval ID from admin bot."""
+        try:
+            admin_bot = await self.get_admin_bot_entity()
+            if not admin_bot:
+                logger.error("Could not get admin bot entity for deletion")
+                return
+            
+            deleted_count = 0
+            messages_to_delete = []
+            
+            # Search through recent messages
+            async for message in self.client_manager.client.iter_messages(
+                admin_bot,
+                limit=200  # Check last 200 messages
+            ):
+                # Check if message contains the approval ID
+                if message.text and approval_id in message.text:
+                    messages_to_delete.append(message)
+                    
+            # Delete all found messages
+            for message in messages_to_delete:
+                try:
+                    await self.client_manager.client.delete_messages(
+                        admin_bot,
+                        [message.id]
+                    )
+                    deleted_count += 1
+                    logger.info(f"🗑️ Deleted message {message.id} for approval {approval_id}")
+                except Exception as e:
+                    logger.warning(f"Could not delete message {message.id}: {e}")
+            
+            if deleted_count > 0:
+                logger.info(f"🧹 Successfully deleted {deleted_count} message(s) for {approval_id}")
+            else:
+                logger.warning(f"⚠️ No messages found to delete for {approval_id}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error deleting messages for {approval_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     async def publish_approved_news(self, news_data):
         """Publish approved news to the target channel with proper media support."""
@@ -421,111 +476,6 @@ class NewsHandler:
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
-
-    async def _download_media_for_publishing(self, media_info):
-        """Download media from original message for publishing."""
-        if not MEDIA_SUPPORT:
-            logger.warning("Media support not available (missing aiofiles/aiohttp)")
-            return None
-            
-        try:
-            if not media_info or not media_info.get('channel') or not media_info.get('message_id'):
-                logger.warning("Invalid media info for downloading")
-                return None
-            
-            # Get the source channel and message
-            channel_name = media_info['channel']
-            message_id = media_info['message_id']
-            
-            # Ensure channel name has @
-            if not channel_name.startswith('@'):
-                channel_name = f"@{channel_name}"
-            
-            logger.info(f"📥 Downloading media from {channel_name}, message {message_id}")
-            
-            # Get channel entity
-            channel_entity = await self.client_manager.client.get_entity(channel_name)
-            
-            # Get the specific message
-            message = await self.client_manager.client.get_messages(channel_entity, ids=message_id)
-            if not message or not message.media:
-                logger.warning(f"No media found in message {message_id}")
-                return None
-            
-            # Generate unique filename
-            timestamp = int(time.time())
-            media_hash = hashlib.md5(f"{channel_name}_{message_id}".encode()).hexdigest()[:8]
-            
-            # Determine file extension based on media type
-            if isinstance(message.media, MessageMediaPhoto):
-                file_extension = ".jpg"
-            elif isinstance(message.media, MessageMediaDocument):
-                # Try to get extension from document attributes
-                file_extension = ".jpg"  # Default
-                if hasattr(message.media.document, 'attributes'):
-                    for attr in message.media.document.attributes:
-                        if hasattr(attr, 'file_name') and attr.file_name:
-                            file_extension = Path(attr.file_name).suffix or ".jpg"
-                            break
-                        elif hasattr(attr, 'mime_type'):
-                            if 'image/jpeg' in getattr(attr, 'mime_type', ''):
-                                file_extension = ".jpg"
-                            elif 'image/png' in getattr(attr, 'mime_type', ''):
-                                file_extension = ".png"
-                            elif 'image/gif' in getattr(attr, 'mime_type', ''):
-                                file_extension = ".gif"
-                            elif 'image/webp' in getattr(attr, 'mime_type', ''):
-                                file_extension = ".webp"
-            else:
-                logger.warning(f"Unsupported media type: {type(message.media)}")
-                return None
-            
-            # Create temp file path
-            temp_filename = f"news_media_{timestamp}_{media_hash}{file_extension}"
-            temp_media_path = TEMP_MEDIA_DIR / temp_filename
-            
-            # Download media
-            logger.info(f"💾 Downloading to: {temp_media_path}")
-            downloaded_path = await self.client_manager.client.download_media(
-                message.media,
-                file=str(temp_media_path)
-            )
-            
-            if downloaded_path and Path(downloaded_path).exists():
-                # Check file size
-                file_size_mb = Path(downloaded_path).stat().st_size / (1024 * 1024)
-                if file_size_mb > MAX_MEDIA_SIZE_MB:
-                    logger.warning(f"Media file too large: {file_size_mb:.2f}MB > {MAX_MEDIA_SIZE_MB}MB")
-                    Path(downloaded_path).unlink()
-                    return None
-                
-                logger.info(f"✅ Media downloaded successfully: {downloaded_path} ({file_size_mb:.2f}MB)")
-                return Path(downloaded_path)
-            else:
-                logger.error("❌ Failed to download media")
-                return None
-                
-        except Exception as e:
-            logger.error(f"❌ Error downloading media: {e}")
-            return None
-
-    async def _cleanup_media_delayed(self, media_path, delay=None):
-        """Clean up media file after delay."""
-        try:
-            if delay is None:
-                delay = MEDIA_CLEANUP_DELAY
-            
-            logger.info(f"⏰ Scheduling media cleanup in {delay} seconds: {media_path}")
-            await asyncio.sleep(delay)
-            
-            if media_path.exists():
-                media_path.unlink()
-                logger.info(f"🧹 Cleaned up media file: {media_path}")
-            else:
-                logger.debug(f"Media file already removed: {media_path}")
-                
-        except Exception as e:
-            logger.warning(f"Failed to cleanup media file {media_path}: {e}")
 
     async def cleanup_all_temp_media(self):
         """Clean up all temporary media files."""
@@ -870,8 +820,8 @@ class NewsHandler:
                         
                         if message:
                             logger.info(f"✅ Approval sent with media: {approval_id}")
-                            # Store message ID for deletion later
-                            self.admin_message_map[approval_id] = message.id
+                            # Store message info for deletion
+                            self.admin_messages[approval_id] = (admin_bot_entity, message.id)
                     else:
                         logger.warning(f"No media found in original message, sending text only")
                         # Send without media
@@ -881,7 +831,7 @@ class NewsHandler:
                             parse_mode='html'
                         )
                         if message:
-                            self.admin_message_map[approval_id] = message.id
+                            self.admin_messages[approval_id] = (admin_bot_entity, message.id)
                         
                 except Exception as media_error:
                     logger.warning(f"Could not send media with approval: {media_error}")
@@ -892,7 +842,7 @@ class NewsHandler:
                         parse_mode='html'
                     )
                     if message:
-                        self.admin_message_map[approval_id] = message.id
+                        self.admin_messages[approval_id] = (admin_bot_entity, message.id)
             else:
                 # Send text-only message
                 message = await self.client_manager.client.send_message(
@@ -901,15 +851,22 @@ class NewsHandler:
                     parse_mode='html'
                 )
                 if message:
-                    self.admin_message_map[approval_id] = message.id
+                    self.admin_messages[approval_id] = (admin_bot_entity, message.id)
             
             if message:
                 self.approval_stats['sent'] += 1
                 logger.info(f"📤 Approval sent with ID: {approval_id}, Message ID: {message.id}")
                 
-                # Store the message ID in pending news for backup
+                # Store message info for deletion - FIXED tracking
+                self.admin_messages[approval_id] = (admin_bot_entity, message.id)
+                
+                # Also store in pending news for persistence
                 if approval_id in self.pending_news:
                     self.pending_news[approval_id]['admin_message_id'] = message.id
+                    self.pending_news[approval_id]['admin_chat_id'] = admin_bot_entity.id
+                
+                # Save state immediately to persist the message tracking
+                await self.save_pending_news()
                 
                 return True
             else:
@@ -950,7 +907,7 @@ class NewsHandler:
             return None
 
     async def load_pending_news(self):
-        """Load pending news from state file and cleanup old media."""
+        """Load pending news and message tracking from state file."""
         try:
             if self.state_file.exists():
                 with open(self.state_file, 'r', encoding='utf-8') as f:
@@ -958,12 +915,22 @@ class NewsHandler:
                     self.pending_news = data.get('pending_news', {})
                     self.processed_messages = set(data.get('processed_messages', []))
                     self.stats.update(data.get('stats', {}))
-                    self.admin_message_map = data.get('admin_message_map', {})
+                    
+                    # Load admin messages tracking
+                    saved_messages = data.get('admin_messages', {})
+                    self.admin_messages = {}
+                    
+                    # Convert back to proper format
+                    for approval_id, msg_info in saved_messages.items():
+                        if isinstance(msg_info, list) and len(msg_info) == 2:
+                            # We'll need to get the entity when needed
+                            self.admin_messages[approval_id] = tuple(msg_info)
                 
                 logger.info(f"📂 Loaded {len(self.pending_news)} pending news items")
+                logger.info(f"📋 Tracking {len(self.admin_messages)} admin messages")
             else:
                 logger.info("📂 No existing state file found, starting fresh")
-            
+                
             # Clean up any orphaned media files on startup
             if MEDIA_SUPPORT and ENABLE_MEDIA_PROCESSING and MEDIA_CLEANUP_ENABLED:
                 await self.cleanup_all_temp_media()
@@ -973,23 +940,33 @@ class NewsHandler:
             logger.error(f"❌ Error loading pending news: {e}")
             self.pending_news = {}
             self.processed_messages = set()
-            self.admin_message_map = {}
+            self.admin_messages = {}
 
     async def save_pending_news(self):
-        """Save pending news to state file."""
+        """Save pending news and message tracking to state file."""
         try:
+            # Convert admin_messages to serializable format
+            admin_messages_serializable = {}
+            for approval_id, (entity, msg_id) in self.admin_messages.items():
+                try:
+                    # Store entity ID instead of entity object
+                    entity_id = entity.id if hasattr(entity, 'id') else entity
+                    admin_messages_serializable[approval_id] = [entity_id, msg_id]
+                except:
+                    pass
+            
             data = {
                 'pending_news': self.pending_news,
                 'processed_messages': list(self.processed_messages),
                 'stats': self.stats,
-                'admin_message_map': self.admin_message_map,
+                'admin_messages': admin_messages_serializable,
                 'last_updated': time.time()
             }
             
             with open(self.state_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
                 
-            logger.debug("💾 Pending news state saved")
+            logger.debug("💾 Pending news state saved with message tracking")
             
         except Exception as e:
             logger.error(f"❌ Error saving pending news: {e}")
@@ -1011,8 +988,8 @@ class NewsHandler:
             for news_id in expired_ids:
                 del self.pending_news[news_id]
                 # Also remove from message map
-                if news_id in self.admin_message_map:
-                    del self.admin_message_map[news_id]
+                if news_id in self.admin_messages:
+                    del self.admin_messages[news_id]
             
             if expired_ids:
                 logger.info(f"🧹 Cleaned {len(expired_ids)} expired pending news items")
@@ -1080,6 +1057,42 @@ class NewsHandler:
                              max(1, self.stats.get('messages_processed', 1))) * 100,
             'media_support': MEDIA_SUPPORT and ENABLE_MEDIA_PROCESSING
         }
+
+    async def cleanup_orphaned_admin_messages(self):
+        """Clean up any orphaned messages in admin bot."""
+        try:
+            admin_bot = await self.get_admin_bot_entity()
+            if not admin_bot:
+                return
+            
+            cleaned = 0
+            current_pending = set(self.pending_news.keys())
+            
+            # Check recent messages
+            async for msg in self.client_manager.client.iter_messages(
+                admin_bot,
+                limit=200,
+                from_user='me'
+            ):
+                if msg.text and "FINANCIAL NEWS PENDING APPROVAL" in msg.text:
+                    # Extract approval ID from message
+                    match = re.search(r'ID: <code>(\w+)</code>', msg.text)
+                    if match:
+                        approval_id = match.group(1)
+                        # If this approval is no longer pending, delete the message
+                        if approval_id not in current_pending:
+                            try:
+                                await msg.delete()
+                                cleaned += 1
+                                logger.info(f"🧹 Cleaned orphaned message for {approval_id}")
+                            except:
+                                pass
+            
+            if cleaned > 0:
+                logger.info(f"🧹 Cleaned {cleaned} orphaned admin messages")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning orphaned messages: {e}")
 
     async def force_process_recent_messages(self, channel_username, num_messages=5):
         """Force process recent messages for testing/debugging."""
