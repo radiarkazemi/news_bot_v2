@@ -197,7 +197,7 @@ class NewsHandler:
                 await asyncio.sleep(300)  # Wait 5 minutes on error
 
     async def setup_approval_handler(self):
-        """Set up the approval command handler with clickable commands and DEBUG commands."""
+        """Set up the approval command handler with clickable commands and DEBUG commands - FIXED VERSION."""
         try:
             client = self.client_manager.client
             
@@ -207,6 +207,7 @@ class NewsHandler:
                 """Handle approval commands from admin bot."""
                 try:
                     approval_id = event.pattern_match.group(1)
+                    logger.info(f"🎯 Approval command received: /submit{approval_id}")
                     await self._process_approval(approval_id, event)
                 except Exception as e:
                     logger.error(f"❌ Error handling approval command: {e}")
@@ -216,17 +217,17 @@ class NewsHandler:
                 """Handle rejection commands from admin bot."""
                 try:
                     approval_id = event.pattern_match.group(1)
+                    logger.info(f"🎯 Rejection command received: /reject{approval_id}")
                     await self._process_rejection(approval_id, event)
                 except Exception as e:
                     logger.error(f"❌ Error handling rejection command: {e}")
             
-            # DEBUG COMMAND: Test deletion functionality
+            # DEBUG COMMAND: Test deletion functionality - FIXED
             @client.on(events.NewMessage(pattern=r'/test_deletion'))
             async def handle_test_deletion_command(event):
-                """Test deletion functionality."""
+                """Test deletion functionality - ACCEPTS FROM ANY USER."""
                 try:
-                    if event.sender_id != (await client.get_me()).id:
-                        return  # Only respond to our own test command
+                    logger.info(f"🧪 Test deletion command received from user {event.sender_id}")
                     
                     await event.respond("🧪 Testing admin bot connection and deletion...")
                     
@@ -235,22 +236,23 @@ class NewsHandler:
                     
                     if test_result:
                         await event.respond("✅ Admin bot connection test passed!")
+                        logger.info("✅ Admin bot test passed")
                     else:
                         await event.respond("❌ Admin bot connection test failed! Check logs for details.")
+                        logger.error("❌ Admin bot test failed")
                     
                 except Exception as e:
                     logger.error(f"Error in test deletion command: {e}")
                     await event.respond(f"❌ Test error: {e}")
 
-            # DEBUG COMMAND: Force delete messages for specific approval
+            # DEBUG COMMAND: Force delete messages for specific approval - FIXED
             @client.on(events.NewMessage(pattern=r'/force_delete (\w+)'))
             async def handle_force_delete_command(event):
-                """Force delete messages for a specific approval ID."""
+                """Force delete messages for a specific approval ID - ACCEPTS FROM ANY USER."""
                 try:
-                    if event.sender_id != (await client.get_me()).id:
-                        return  # Only respond to our own command
-                    
                     approval_id = event.pattern_match.group(1)
+                    logger.info(f"🗑️ Force delete command received for: {approval_id}")
+                    
                     await event.respond(f"🗑️ Force deleting messages for approval: {approval_id}")
                     
                     # Force delete
@@ -258,39 +260,66 @@ class NewsHandler:
                     
                     if success:
                         await event.respond(f"✅ Force deletion completed for {approval_id}")
+                        logger.info(f"✅ Force deletion succeeded for {approval_id}")
                     else:
                         await event.respond(f"❌ Force deletion failed for {approval_id} - check logs")
+                        logger.error(f"❌ Force deletion failed for {approval_id}")
                     
                 except Exception as e:
                     logger.error(f"Error in force delete command: {e}")
                     await event.respond(f"❌ Force delete error: {e}")
 
-            # DEBUG COMMAND: Show pending approvals
+            # DEBUG COMMAND: Show pending approvals - FIXED
             @client.on(events.NewMessage(pattern=r'/show_pending'))
             async def handle_show_pending_command(event):
-                """Show current pending approvals."""
+                """Show current pending approvals - ACCEPTS FROM ANY USER."""
                 try:
-                    if event.sender_id != (await client.get_me()).id:
-                        return
+                    logger.info(f"📋 Show pending command received")
                     
                     pending_count = len(self.pending_news)
                     if pending_count == 0:
                         await event.respond("📋 No pending approvals")
                     else:
-                        pending_list = list(self.pending_news.keys())[:5]  # Show first 5
+                        pending_list = list(self.pending_news.keys())[:10]  # Show first 10
                         pending_text = "\n".join([f"• {approval_id}" for approval_id in pending_list])
-                        await event.respond(f"📋 Pending approvals ({pending_count}):\n{pending_text}")
+                        message = f"📋 Pending approvals ({pending_count}):\n{pending_text}"
+                        if pending_count > 10:
+                            message += f"\n... and {pending_count - 10} more"
+                        await event.respond(message)
                     
                 except Exception as e:
                     logger.error(f"Error in show pending command: {e}")
+                    await event.respond(f"❌ Error: {e}")
 
-            # Manual cleanup command
+            # DEBUG COMMAND: Show bot info - NEW
+            @client.on(events.NewMessage(pattern=r'/bot_info'))
+            async def handle_bot_info_command(event):
+                """Show bot information for debugging."""
+                try:
+                    logger.info(f"ℹ️ Bot info command received")
+                    
+                    me = await client.get_me()
+                    admin_bot = await self.get_admin_bot_entity()
+                    
+                    info_text = f"🤖 Bot Info:\n"
+                    info_text += f"• My ID: {me.id}\n"
+                    info_text += f"• My Username: @{me.username}\n"
+                    info_text += f"• Admin Bot: {admin_bot.username if admin_bot else 'NOT FOUND'}\n"
+                    info_text += f"• Pending News: {len(self.pending_news)}\n"
+                    info_text += f"• Admin Messages Tracked: {len(self.admin_messages)}\n"
+                    
+                    await event.respond(info_text)
+                    
+                except Exception as e:
+                    logger.error(f"Error in bot info command: {e}")
+                    await event.respond(f"❌ Error: {e}")
+
+            # Manual cleanup command - FIXED
             @client.on(events.NewMessage(pattern=r'/cleanup'))
             async def handle_cleanup_command(event):
-                """Manual cleanup of old approval messages."""
+                """Manual cleanup of old approval messages - ACCEPTS FROM ANY USER."""
                 try:
-                    if event.sender_id != (await client.get_me()).id:
-                        return  # Only respond to our own cleanup command
+                    logger.info(f"🧹 Cleanup command received")
                     
                     await event.respond("🧹 Starting cleanup of processed messages...")
                     
@@ -301,8 +330,19 @@ class NewsHandler:
                     
                 except Exception as e:
                     logger.error(f"Error in cleanup command: {e}")
+                    await event.respond(f"❌ Cleanup error: {e}")
             
-            logger.info("✅ News approval handler set up successfully with WORKING AUTO-DELETE and debug commands")
+            # Log all incoming messages for debugging - TEMPORARY
+            @client.on(events.NewMessage())
+            async def handle_all_messages(event):
+                """Log all messages for debugging - REMOVE THIS AFTER TESTING."""
+                try:
+                    if event.text and event.text.startswith('/'):
+                        logger.info(f"🎯 Command received: {event.text[:50]} from {event.sender_id}")
+                except:
+                    pass
+            
+            logger.info("✅ News approval handler set up successfully with FIXED debug commands")
             return True
             
         except Exception as e:
