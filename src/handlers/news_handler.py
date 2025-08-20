@@ -397,17 +397,16 @@ class NewsHandler:
                 logger.info(f"✅ Test message sent: {test_msg.id}")
                 
                 await asyncio.sleep(3)
-                await test_msg.delete()
-                logger.info(f"✅ Test message deleted successfully")
+                
+                # Check if message is outgoing before deletion
+                if test_msg.out:
+                    await test_msg.delete()
+                    logger.info(f"✅ Test message deleted successfully")
+                else:
+                    logger.warning("⚠️ Test message is not outgoing, skipping deletion")
                 
                 return True
                 
-            except ChatAdminRequiredError:
-                logger.error("❌ CHAT_ADMIN_REQUIRED: Bot needs admin rights in admin chat")
-                return False
-            except MessageDeleteForbiddenError:
-                logger.error("❌ MESSAGE_DELETE_FORBIDDEN: Message deletion is forbidden")
-                return False
             except Exception as test_error:
                 logger.error(f"❌ Cannot send/delete test messages: {test_error}")
                 return False
@@ -439,15 +438,6 @@ class NewsHandler:
             response_msg = await event.respond(response_text)
             
             logger.info(f"✅ Successfully published approved news: {approval_id}")
-        
-        # 🚨 DELETION FIX: Call deletion method
-        logger.info(f"🗑️ CALLING deletion for approval {approval_id}")
-        deletion_success = await self._delete_messages_for_approval_working(approval_id)
-        
-        if deletion_success:
-            logger.info(f"✅ Successfully deleted messages for {approval_id}")
-        else:
-            logger.warning(f"⚠️ Deletion issues for {approval_id}")
             
             # Update statistics
             self.stats['news_approved'] += 1
@@ -457,17 +447,17 @@ class NewsHandler:
             del self.pending_news[approval_id]
             await self.save_pending_news()
             
-            # Enhanced deletion process
-            logger.info(f"🗑️ Starting enhanced deletion process for approval {approval_id}")
+            # 🚨 FIX: Call the correct deletion method
+            logger.info(f"🗑️ Starting deletion process for approval {approval_id}")
             deletion_success = await self._delete_messages_for_approval_enhanced(approval_id)
             
             if deletion_success:
                 logger.info(f"✅ Successfully deleted all messages for {approval_id}")
-                self.stats['deletions_successful'] += 1
+                self.stats['deletions_successful'] = self.stats.get('deletions_successful', 0) + 1
             else:
                 logger.warning(f"⚠️ Some issues occurred during deletion for {approval_id}")
             
-            self.stats['deletions_attempted'] += 1
+            self.stats['deletions_attempted'] = self.stats.get('deletions_attempted', 0) + 1
             
             # Delete the success response after showing it briefly
             await asyncio.sleep(3)
@@ -476,7 +466,6 @@ class NewsHandler:
                 logger.info(f"🗑️ Deleted success response for {approval_id}")
             except Exception as e:
                 logger.warning(f"Could not delete success response: {e}")
-            
         else:
             # Failure response
             error_text = f"❌ Failed to publish news {approval_id}. Please try again or contact support."
@@ -488,6 +477,8 @@ class NewsHandler:
         """Process rejection request with enhanced deletion."""
         logger.info(f"🚫 Received rejection for: {approval_id}")
         
+        response_msg = None
+        
         if approval_id in self.pending_news:
             # Remove from pending
             news_data = self.pending_news[approval_id]
@@ -498,42 +489,34 @@ class NewsHandler:
             response_msg = await event.respond(response_text)
             
             logger.info(f"🚫 News {approval_id} rejected and removed")
+        else:
+            response_msg = await event.respond(f"❌ News item {approval_id} not found")
         
-        # 🚨 DELETION FIX: Call deletion method
-        logger.info(f"🗑️ CALLING deletion for rejection {approval_id}")
-        deletion_success = await self._delete_messages_for_approval_working(approval_id)
+        # 🚨 FIX: Call the correct deletion method
+        logger.info(f"🗑️ Starting deletion process for rejection {approval_id}")
+        deletion_success = await self._delete_messages_for_approval_enhanced(approval_id)
         
         if deletion_success:
-            logger.info(f"✅ Successfully deleted messages for {approval_id}")
+            logger.info(f"✅ Successfully deleted all messages for {approval_id}")
+            self.stats['deletions_successful'] = self.stats.get('deletions_successful', 0) + 1
         else:
-            logger.warning(f"⚠️ Deletion issues for {approval_id}")
-            
-            # Enhanced deletion process
-            logger.info(f"🗑️ Starting enhanced deletion process for rejection {approval_id}")
-            deletion_success = await self._delete_messages_for_approval_enhanced(approval_id)
-            
-            if deletion_success:
-                logger.info(f"✅ Successfully deleted all messages for {approval_id}")
-                self.stats['deletions_successful'] += 1
-            else:
-                logger.warning(f"⚠️ Some issues occurred during deletion for {approval_id}")
-            
-            self.stats['deletions_attempted'] += 1
-            
-            # Delete the rejection response after showing it briefly
+            logger.warning(f"⚠️ Some issues occurred during deletion for {approval_id}")
+        
+        self.stats['deletions_attempted'] = self.stats.get('deletions_attempted', 0) + 1
+        
+        # Delete the rejection response after showing it briefly
+        if response_msg:
             await asyncio.sleep(3)
             try:
                 await response_msg.delete()
                 logger.info(f"🗑️ Deleted rejection response for {approval_id}")
             except Exception as e:
                 logger.warning(f"Could not delete rejection response: {e}")
-        else:
-            await event.respond(f"❌ News item {approval_id} not found")
 
     async def _delete_messages_for_approval_enhanced(self, approval_id):
         """
         ENHANCED VERSION: Delete ALL messages related to an approval ID.
-        Optimized for both local and server environments.
+        Fixed for server compatibility - removes 'from_user' parameter issue.
         """
         try:
             logger.info(f"🗑️ [ENHANCED] Starting deletion process for approval {approval_id}")
@@ -554,12 +537,18 @@ class NewsHandler:
             # Enhanced search with comprehensive error handling
             try:
                 search_count = 0
+                
+                # FIX: Remove 'from_user' parameter for better server compatibility
+                # Instead, check if message is outgoing (sent by us)
                 async for message in self.client_manager.client.iter_messages(
                     admin_bot,
-                    limit=200,  # Reasonable limit
-                    from_user='me'  # Only our messages
+                    limit=200  # Reasonable limit
                 ):
                     search_count += 1
+                    
+                    # Skip if not our message (outgoing)
+                    if not message.out:
+                        continue
                     
                     # Skip if no text
                     if not message.text:
@@ -612,11 +601,6 @@ class NewsHandler:
             if found_messages:
                 for message, reason in found_messages:
                     try:
-                        # Check if it's our message
-                        if hasattr(message, 'out') and not message.out:
-                            logger.warning(f"⚠️ [ENHANCED] Skipping message {message.id}: not our message")
-                            continue
-                        
                         # Try to delete the message
                         await message.delete()
                         deleted_count += 1
@@ -625,12 +609,6 @@ class NewsHandler:
                         # Adaptive delay based on environment
                         await asyncio.sleep(1.5)
                         
-                    except ChatAdminRequiredError:
-                        logger.error(f"❌ [ENHANCED] Bot needs admin rights in admin chat")
-                        return False
-                    except MessageDeleteForbiddenError:
-                        logger.error(f"❌ [ENHANCED] Message deletion is forbidden")
-                        return False
                     except Exception as delete_error:
                         logger.warning(f"⚠️ [ENHANCED] Could not delete message {message.id} ({reason}): {delete_error}")
                         continue
@@ -656,8 +634,9 @@ class NewsHandler:
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
 
+
     async def cleanup_all_processed_messages(self):
-        """Clean up all messages for processed approvals."""
+        """Clean up all messages for processed approvals - Fixed version."""
         try:
             admin_bot = await self.get_admin_bot_entity()
             if not admin_bot:
@@ -671,13 +650,16 @@ class NewsHandler:
             deleted_count = 0
             checked_count = 0
             
-            # Check recent messages
+            # FIX: Remove 'from_user' parameter and check message.out instead
             async for message in self.client_manager.client.iter_messages(
                 admin_bot,
-                limit=300,  # Check more messages
-                from_user='me'  # Only our messages
+                limit=300  # Check more messages
             ):
                 checked_count += 1
+                
+                # Skip if not our message
+                if not message.out:
+                    continue
                 
                 if not message.text:
                     continue
@@ -685,6 +667,7 @@ class NewsHandler:
                 # Look for approval messages
                 if "FINANCIAL NEWS PENDING APPROVAL" in message.text:
                     # Extract approval ID from message
+                    import re
                     match = re.search(r'ID: <code>(\w+)</code>', message.text)
                     if match:
                         found_approval_id = match.group(1)
