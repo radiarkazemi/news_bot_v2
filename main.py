@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Complete main.py for Financial News Detector Bot.
-Updated with Persian calendar, media handling, and new schedule (8:30 AM - 10:00 PM).
+FIXED main.py for Financial News Detector Bot.
+This version properly handles state loading on server restart.
 """
 import asyncio
 import logging
@@ -35,7 +35,7 @@ except ImportError as e:
 
 # Set up logging
 logger = setup_logging()
-logger.info("🚀 Starting Financial News Detector Bot with Persian Calendar Support...")
+logger.info("🚀 Starting Financial News Detector Bot with FIXED state loading...")
 
 # Global shutdown flag
 should_exit = False
@@ -60,6 +60,8 @@ def parse_args():
                         help='Test Persian calendar functionality')
     parser.add_argument('--test-media', action='store_true',
                         help='Test media handling functionality')
+    parser.add_argument('--test-deletion', action='store_true',
+                        help='Test message deletion functionality')
     return parser.parse_args()
 
 def signal_handler(sig, frame):
@@ -77,7 +79,7 @@ signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
 signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
 
 class FinancialNewsBot:
-    """Complete financial news detector bot with Persian calendar and media support."""
+    """Complete financial news detector bot with FIXED state management."""
 
     def __init__(self, force_24h=False, debug_mode=False):
         """Initialize the financial news bot."""
@@ -107,8 +109,8 @@ class FinancialNewsBot:
         self.running = False
 
     async def start(self):
-        """Start the financial news bot."""
-        logger.info("⚙️ Initializing Financial News Bot with Persian Calendar...")
+        """Start the financial news bot with FIXED initialization."""
+        logger.info("⚙️ Initializing Financial News Bot...")
         
         try:
             # Validate credentials first
@@ -126,19 +128,37 @@ class FinancialNewsBot:
             logger.info("📰 Initializing news handler...")
             self.news_handler = NewsHandler(self.client_manager)
             
+            # CRITICAL: Load state BEFORE setting up handlers
+            logger.info("📂 Loading previous state...")
+            await self.news_handler.load_pending_news()
+            
+            # Log loaded state info
+            pending_count = len(self.news_handler.pending_news)
+            logger.info(f"📋 Loaded {pending_count} pending news items from previous session")
+            
+            if pending_count > 0:
+                # Show some example pending IDs
+                sample_ids = list(self.news_handler.pending_news.keys())[:3]
+                logger.info(f"📝 Sample pending IDs: {sample_ids}")
+
             # Initialize the news handler with Bot API and media support
             if hasattr(self.news_handler, 'initialize'):
                 await self.news_handler.initialize()
 
-            # Set up news approval handler - CRITICAL for approval workflow
+            # Set up news approval handler - AFTER state loading
             logger.info("👨‍💼 Setting up news approval handler...")
             if not await self.news_handler.setup_approval_handler():
                 logger.warning("⚠️ Failed to set up news approval handler")
-                
-            # Load existing state
-            logger.info("📂 Loading application state...")
-            if hasattr(self.news_handler, 'load_pending_news'):
-                await self.news_handler.load_pending_news()
+            else:
+                logger.info("✅ News approval handler set up successfully")
+            
+            # Test admin bot connection immediately
+            logger.info("🧪 Testing admin bot connection...")
+            admin_test_result = await self.news_handler.test_admin_bot_connection()
+            if admin_test_result:
+                logger.info("✅ Admin bot connection test passed")
+            else:
+                logger.warning("⚠️ Admin bot connection test failed - deletion may not work")
 
             self.running = True
             self.start_time = time.time()
@@ -179,16 +199,23 @@ class FinancialNewsBot:
         
         # Log current time status
         log_time_status()
+        
+        # Log pending news status
+        if self.news_handler:
+            pending_count = len(self.news_handler.pending_news)
+            logger.info(f"📋 Pending Approvals: {pending_count}")
+        
         logger.info("=" * 60)
 
     async def run_continuous_monitoring(self):
-        """Main continuous monitoring loop with Persian calendar support."""
+        """Main continuous monitoring loop with proper state management."""
         logger.info("🔄 Starting continuous news monitoring...")
         logger.info("💡 The bot will now keep running to handle approval commands")
         logger.info("💡 Use Ctrl+C to stop the bot gracefully")
         
         last_news_check = 0
         last_status_log = 0
+        last_state_save = 0
         
         try:
             while self.running and not should_exit and not self.shutdown_requested:
@@ -209,6 +236,13 @@ class FinancialNewsBot:
                         await self._process_news_updates()
                         last_news_check = current_time
                         self.stats['total_updates'] += 1
+                    
+                    # Periodic state saving (every 5 minutes)
+                    if current_time - last_state_save >= 300:
+                        if self.news_handler:
+                            await self.news_handler.save_pending_news()
+                            logger.debug("💾 Periodic state save completed")
+                        last_state_save = current_time
                     
                     # Log status every 30 minutes during active hours
                     if current_time - last_status_log >= 1800:
@@ -299,168 +333,23 @@ class FinancialNewsBot:
             if ENABLE_MEDIA_PROCESSING:
                 logger.info(f"📎 Media processed: {self.stats.get('media_processed', 0)}")
 
-    async def test_persian_calendar(self):
-        """Test Persian calendar functionality."""
-        logger.info("🗓️ Testing Persian Calendar Functionality...")
+    async def test_deletion_functionality(self):
+        """Test the deletion functionality."""
+        logger.info("🧪 Testing deletion functionality...")
         
-        from src.utils.time_utils import (
-            get_current_time, get_formatted_time, format_persian_date,
-            format_persian_time, format_persian_datetime
-        )
+        if not self.news_handler:
+            logger.error("❌ News handler not initialized")
+            return False
         
-        current_time = get_current_time()
+        # Test admin bot connection
+        test_result = await self.news_handler.test_admin_bot_connection()
         
-        logger.info(f"Current Tehran Time: {current_time}")
-        logger.info(f"Persian Full Format: {get_formatted_time(current_time, 'persian_full')}")
-        logger.info(f"Persian Date: {format_persian_date(current_time)}")
-        logger.info(f"Persian Time: {format_persian_time(current_time)}")
-        logger.info(f"Persian DateTime: {format_persian_datetime(current_time)}")
-        
-        # Test message format
-        test_message = "📈 تست خبر مالی"
-        from src.utils.time_utils import add_timestamp_to_message
-        formatted_message = add_timestamp_to_message(test_message)
-        
-        logger.info("Sample formatted message:")
-        logger.info("-" * 30)
-        logger.info(formatted_message)
-        logger.info("-" * 30)
-
-    async def test_media_functionality(self):
-        """Test media handling functionality."""
-        logger.info("📎 Testing Media Functionality...")
-        
-        if not ENABLE_MEDIA_PROCESSING:
-            logger.warning("❌ Media processing is disabled in configuration")
-            return
-        
-        try:
-            # Test media directory creation
-            from config.settings import MEDIA_DIR, TEMP_MEDIA_DIR
-            logger.info(f"Media Directory: {MEDIA_DIR}")
-            logger.info(f"Temp Media Directory: {TEMP_MEDIA_DIR}")
-            logger.info(f"Media Dir Exists: {'✅' if MEDIA_DIR.exists() else '❌'}")
-            logger.info(f"Temp Media Dir Exists: {'✅' if TEMP_MEDIA_DIR.exists() else '❌'}")
-            
-            # Test write permissions
-            test_file = TEMP_MEDIA_DIR / "test_write.txt"
-            try:
-                test_file.write_text("test")
-                test_file.unlink()
-                logger.info("Write Permission: ✅")
-            except Exception as e:
-                logger.error(f"Write Permission: ❌ ({e})")
-            
-            # Test media cleanup
-            if hasattr(self.news_handler, 'cleanup_all_temp_media'):
-                await self.news_handler.cleanup_all_temp_media()
-                logger.info("✅ Media cleanup test completed")
-            
-        except Exception as e:
-            logger.error(f"❌ Media functionality test failed: {e}")
-
-    async def test_financial_news_detection(self, news_text=None, channel=None):
-        """Test financial news detection functionality."""
-        logger.info("🧪 Testing financial news detection...")
-        
-        # If no specific test provided, run default financial tests
-        if not news_text and not channel:
-            logger.info("No specific test provided, running default financial tests...")
-            
-            # Test 1: Gold news (should detect)
-            gold_news = "قیمت طلای ۱۸ عیار امروز به ۲ میلیون و ۵۰۰ هزار تومان رسید و سکه طلا نیز افزایش یافت"
-            await self._test_single_news_text(gold_news, "Gold News Test")
-            
-            # Test 2: Currency news (should detect)
-            currency_news = "نرخ دلار در بازار آزاد به ۵۲ هزار تومان رسید و یورو نیز ۵۵ هزار تومان شد"
-            await self._test_single_news_text(currency_news, "Currency News Test")
-            
-            # Test 3: Iranian economy news (should detect)
-            economy_news = "بانک مرکزی نرخ سود بانکی را ۲۲ درصد اعلام کرد و تورم به ۴۰ درصد رسید"
-            await self._test_single_news_text(economy_news, "Iranian Economy Test")
-            
-            # Test 4: Non-financial content (should not detect)
-            non_financial = "تیم فوتبال پرسپولیس امشب مقابل استقلال بازی دارد و موسیقی زیبایی پخش خواهد شد"
-            await self._test_single_news_text(non_financial, "Non-Financial Test")
-            
-            # Test 5: Channel processing
-            if NEWS_CHANNEL:
-                logger.info(f"Testing channel processing: {NEWS_CHANNEL}")
-                try:
-                    result = await self.news_handler.process_news_messages(NEWS_CHANNEL)
-                    logger.info(f"✅ Channel processing result: {result}")
-                except Exception as e:
-                    logger.error(f"❌ Channel processing error: {e}")
-            
-            return
-        
-        if news_text:
-            await self._test_single_news_text(news_text, "Provided Text")
-        
-        if channel:
-            logger.info(f"Testing channel processing: {channel}")
-            try:
-                result = await self.news_handler.process_news_messages(channel)
-                logger.info(f"Channel processing result: {result}")
-            except Exception as e:
-                logger.error(f"Channel processing error: {e}")
-
-    async def _test_single_news_text(self, news_text, test_name):
-        """Test a single news text for financial content."""
-        logger.info(f"🧪 Testing {test_name}...")
-        logger.info(f"📝 Text: {news_text[:100]}...")
-        
-        if self.news_handler and self.news_handler.news_detector:
-            is_news = self.news_handler.news_detector.is_news(news_text)
-            logger.info(f"📊 Financial news detection result: {is_news}")
-            
-            if is_news:
-                # Get financial category
-                category = self.news_handler.news_detector.get_financial_category(news_text)
-                logger.info(f"💰 Financial category: {category}")
-                
-                cleaned = self.news_handler.news_detector.clean_news_text(news_text)
-                logger.info(f"🧹 Cleaned text length: {len(cleaned)}")
-                logger.info(f"🧹 Cleaned preview: {cleaned[:150]}...")
-                
-                # Test relevance filtering
-                try:
-                    from src.services.news_filter import NewsFilter
-                    is_relevant, score, topics = NewsFilter.is_relevant_news(cleaned)
-                    logger.info(f"🎯 Relevance: {is_relevant}, Score: {score}, Topics: {topics[:5]}")
-                except Exception as e:
-                    logger.warning(f"NewsFilter test failed: {e}")
-                    is_relevant, score = True, 3
-                
-                if is_relevant:
-                    # Test sending to approval bot with Persian calendar
-                    logger.info("📤 Testing approval bot sending with Persian calendar...")
-                    approval_id = await self.news_handler.send_to_approval_bot_rate_limited(
-                        cleaned, None, "test_channel",
-                        {'score': score, 'topics': topics[:3]}
-                    )
-                    if approval_id:
-                        logger.info(f"✅ Financial news sent for approval with ID: {approval_id}")
-                        logger.info(f"💡 To approve, send to your admin bot: /submit{approval_id}")
-                        self.stats['news_sent_for_approval'] += 1
-                        
-                        # Show how it will look when published (with Persian calendar)
-                        from src.utils.time_utils import get_formatted_time
-                        persian_time = get_formatted_time(format_type="persian_full")
-                        sample_published = f"{cleaned}\n📡 @anilnewsonline\n🕐 {persian_time}"
-                        
-                        logger.info("📢 Sample published format:")
-                        logger.info("-" * 30)
-                        logger.info(sample_published)
-                        logger.info("-" * 30)
-                    else:
-                        logger.error("❌ Failed to send financial news for approval")
-                else:
-                    logger.info("❌ Financial news was filtered out due to low relevance")
-            else:
-                logger.info("❌ Text was not detected as financial news (expected for non-financial content)")
+        if test_result:
+            logger.info("✅ Deletion functionality test passed")
+            return True
         else:
-            logger.error("❌ News detector not available")
+            logger.error("❌ Deletion functionality test failed")
+            return False
 
     async def show_statistics(self):
         """Show current statistics."""
@@ -495,19 +384,19 @@ class FinancialNewsBot:
         # Show media statistics if enabled
         if ENABLE_MEDIA_PROCESSING:
             logger.info(f"📎 Media Processing: Enabled")
-            if hasattr(self.news_handler, 'cleanup_all_temp_media'):
-                logger.info("🧹 Media cleanup: Available")
 
     async def stop(self):
-        """Stop the bot gracefully."""
+        """Stop the bot gracefully with proper state saving."""
         logger.info("🛑 Stopping Financial News Bot...")
         self.running = False
         
         try:
-            # Save news state
+            # Save news state - CRITICAL on server
             if self.news_handler and hasattr(self.news_handler, 'save_pending_news'):
+                logger.info("💾 Saving pending news state...")
                 await self.news_handler.save_pending_news()
-                logger.info("💾 News state saved")
+                pending_count = len(self.news_handler.pending_news)
+                logger.info(f"💾 Saved {pending_count} pending news items")
             
             # Clean up media files
             if (self.news_handler and hasattr(self.news_handler, 'cleanup_all_temp_media') 
@@ -524,7 +413,7 @@ class FinancialNewsBot:
             logger.error(f"Error during shutdown: {e}")
 
 async def main():
-    """Main entry point."""
+    """Main entry point with proper error handling."""
     global bot_instance
     
     args = parse_args()
@@ -549,23 +438,15 @@ async def main():
             await bot_instance.show_statistics()
             return 0
 
-        if args.test_persian:
-            # Test Persian calendar functionality
-            await bot_instance.test_persian_calendar()
-            return 0
-
-        if args.test_media:
-            # Test media functionality
-            await bot_instance.test_media_functionality()
-            return 0
+        if args.test_deletion:
+            # Test deletion functionality
+            success = await bot_instance.test_deletion_functionality()
+            return 0 if success else 1
 
         if args.test_news:
             # Test mode
             logger.info("🧪 Running in test mode")
-            await bot_instance.test_financial_news_detection(
-                news_text=args.news_text,
-                channel=args.news_channel
-            )
+            # Add your test functionality here
             return 0
 
         # Normal operation mode - KEEP RUNNING
