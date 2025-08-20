@@ -439,6 +439,15 @@ class NewsHandler:
             response_msg = await event.respond(response_text)
             
             logger.info(f"✅ Successfully published approved news: {approval_id}")
+        
+        # 🚨 DELETION FIX: Call deletion method
+        logger.info(f"🗑️ CALLING deletion for approval {approval_id}")
+        deletion_success = await self._delete_messages_for_approval_working(approval_id)
+        
+        if deletion_success:
+            logger.info(f"✅ Successfully deleted messages for {approval_id}")
+        else:
+            logger.warning(f"⚠️ Deletion issues for {approval_id}")
             
             # Update statistics
             self.stats['news_approved'] += 1
@@ -489,6 +498,15 @@ class NewsHandler:
             response_msg = await event.respond(response_text)
             
             logger.info(f"🚫 News {approval_id} rejected and removed")
+        
+        # 🚨 DELETION FIX: Call deletion method
+        logger.info(f"🗑️ CALLING deletion for rejection {approval_id}")
+        deletion_success = await self._delete_messages_for_approval_working(approval_id)
+        
+        if deletion_success:
+            logger.info(f"✅ Successfully deleted messages for {approval_id}")
+        else:
+            logger.warning(f"⚠️ Deletion issues for {approval_id}")
             
             # Enhanced deletion process
             logger.info(f"🗑️ Starting enhanced deletion process for rejection {approval_id}")
