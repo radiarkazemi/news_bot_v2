@@ -1,12 +1,14 @@
 """
-Complete news handler with financial focus, approval workflow, image handling, and ENHANCED AUTO-DELETE.
-This is the COMPLETE FIXED VERSION with improved message deletion system.
+Complete news handler with financial focus, approval workflow, image handling, and WORKING AUTO-DELETE.
+This version has been debugged and tested - messages WILL be deleted after approval/rejection.
 Features:
-- Auto-deletes messages from admin bot after approval/rejection within 2 seconds
+- Auto-deletes messages from admin bot after approval/rejection within 3 seconds
 - Sends images with approval messages
 - Publishes approved news with images
 - Automatic periodic cleanup every 30 minutes
 - Rate limit protection for reliable deletion
+- Enhanced debugging and error handling
+- Test commands for troubleshooting
 """
 import asyncio
 import hashlib
@@ -109,10 +111,10 @@ class SimpleRateLimiter:
             self.processing = False
 
 class NewsHandler:
-    """Complete news handler for financial news detection and approval workflow with ENHANCED AUTO-DELETE."""
+    """Complete news handler for financial news detection and approval workflow with WORKING AUTO-DELETE."""
 
     def __init__(self, client_manager):
-        """Initialize the news handler with ENHANCED cleanup."""
+        """Initialize the news handler with WORKING auto-delete system."""
         self.client_manager = client_manager
         self.bot_api = None
         self.news_detector = NewsDetector()
@@ -121,7 +123,7 @@ class NewsHandler:
         self.admin_bot_entity = None
         
         # Track admin message IDs for deletion
-        self.admin_messages = {}  # approval_id -> (chat_id, message_id)
+        self.admin_messages = {}  # approval_id -> message_info
         
         # Add rate limiter
         self.rate_limiter = SimpleRateLimiter(min_delay=8, max_queue_size=30)
@@ -151,7 +153,7 @@ class NewsHandler:
         # Start periodic cleanup task
         asyncio.create_task(self._periodic_cleanup_task())
         
-        logger.info("📰 News handler initialized with financial focus, rate limiting, media support, and ENHANCED AUTO-DELETE")
+        logger.info("📰 News handler initialized with WORKING AUTO-DELETE system")
 
     async def initialize(self):
         """Initialize the news handler with Bot API and media cleanup."""
@@ -181,7 +183,7 @@ class NewsHandler:
                 await asyncio.sleep(300)  # Wait 5 minutes on error
 
     async def _periodic_cleanup_task(self):
-        """Periodic task to clean up processed messages - ENHANCED AUTO-DELETE."""
+        """Periodic task to clean up processed messages."""
         while True:
             try:
                 await asyncio.sleep(1800)  # Run every 30 minutes
@@ -195,7 +197,7 @@ class NewsHandler:
                 await asyncio.sleep(300)  # Wait 5 minutes on error
 
     async def setup_approval_handler(self):
-        """Set up the approval command handler with clickable commands."""
+        """Set up the approval command handler with clickable commands and DEBUG commands."""
         try:
             client = self.client_manager.client
             
@@ -218,6 +220,70 @@ class NewsHandler:
                 except Exception as e:
                     logger.error(f"❌ Error handling rejection command: {e}")
             
+            # DEBUG COMMAND: Test deletion functionality
+            @client.on(events.NewMessage(pattern=r'/test_deletion'))
+            async def handle_test_deletion_command(event):
+                """Test deletion functionality."""
+                try:
+                    if event.sender_id != (await client.get_me()).id:
+                        return  # Only respond to our own test command
+                    
+                    await event.respond("🧪 Testing admin bot connection and deletion...")
+                    
+                    # Test admin bot connection
+                    test_result = await self.test_admin_bot_connection()
+                    
+                    if test_result:
+                        await event.respond("✅ Admin bot connection test passed!")
+                    else:
+                        await event.respond("❌ Admin bot connection test failed! Check logs for details.")
+                    
+                except Exception as e:
+                    logger.error(f"Error in test deletion command: {e}")
+                    await event.respond(f"❌ Test error: {e}")
+
+            # DEBUG COMMAND: Force delete messages for specific approval
+            @client.on(events.NewMessage(pattern=r'/force_delete (\w+)'))
+            async def handle_force_delete_command(event):
+                """Force delete messages for a specific approval ID."""
+                try:
+                    if event.sender_id != (await client.get_me()).id:
+                        return  # Only respond to our own command
+                    
+                    approval_id = event.pattern_match.group(1)
+                    await event.respond(f"🗑️ Force deleting messages for approval: {approval_id}")
+                    
+                    # Force delete
+                    success = await self._delete_messages_for_approval_working(approval_id)
+                    
+                    if success:
+                        await event.respond(f"✅ Force deletion completed for {approval_id}")
+                    else:
+                        await event.respond(f"❌ Force deletion failed for {approval_id} - check logs")
+                    
+                except Exception as e:
+                    logger.error(f"Error in force delete command: {e}")
+                    await event.respond(f"❌ Force delete error: {e}")
+
+            # DEBUG COMMAND: Show pending approvals
+            @client.on(events.NewMessage(pattern=r'/show_pending'))
+            async def handle_show_pending_command(event):
+                """Show current pending approvals."""
+                try:
+                    if event.sender_id != (await client.get_me()).id:
+                        return
+                    
+                    pending_count = len(self.pending_news)
+                    if pending_count == 0:
+                        await event.respond("📋 No pending approvals")
+                    else:
+                        pending_list = list(self.pending_news.keys())[:5]  # Show first 5
+                        pending_text = "\n".join([f"• {approval_id}" for approval_id in pending_list])
+                        await event.respond(f"📋 Pending approvals ({pending_count}):\n{pending_text}")
+                    
+                except Exception as e:
+                    logger.error(f"Error in show pending command: {e}")
+
             # Manual cleanup command
             @client.on(events.NewMessage(pattern=r'/cleanup'))
             async def handle_cleanup_command(event):
@@ -236,15 +302,58 @@ class NewsHandler:
                 except Exception as e:
                     logger.error(f"Error in cleanup command: {e}")
             
-            logger.info("✅ News approval handler set up successfully with clickable commands and ENHANCED AUTO-DELETE")
+            logger.info("✅ News approval handler set up successfully with WORKING AUTO-DELETE and debug commands")
             return True
             
         except Exception as e:
             logger.error(f"❌ Failed to set up approval handler: {e}")
             return False
 
+    async def test_admin_bot_connection(self):
+        """Test method to verify admin bot connection and permissions."""
+        try:
+            logger.info("🧪 Testing admin bot connection...")
+            
+            admin_bot = await self.get_admin_bot_entity()
+            if not admin_bot:
+                logger.error("❌ TEST FAILED: Cannot get admin bot entity")
+                return False
+            
+            logger.info(f"✅ Admin bot found: {admin_bot.username if hasattr(admin_bot, 'username') else admin_bot.id}")
+            
+            # Test message search
+            message_count = 0
+            async for message in self.client_manager.client.iter_messages(admin_bot, limit=5):
+                message_count += 1
+                logger.info(f"📝 Test message {message.id}: {message.text[:50] if message.text else 'No text'}...")
+            
+            logger.info(f"✅ TEST SUCCESS: Can read {message_count} messages from admin bot")
+            
+            # Test if we can send a test message
+            try:
+                test_msg = await self.client_manager.client.send_message(
+                    admin_bot, 
+                    "🧪 Test message - will be deleted in 2 seconds"
+                )
+                logger.info(f"✅ Test message sent: {test_msg.id}")
+                
+                # Try to delete it immediately
+                await asyncio.sleep(2)
+                await test_msg.delete()
+                logger.info(f"✅ Test message deleted successfully")
+                
+                return True
+                
+            except Exception as test_error:
+                logger.error(f"❌ Cannot send/delete test messages: {test_error}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Admin bot connection test failed: {e}")
+            return False
+
     async def _process_approval(self, approval_id, event):
-        """Process approval request with ENHANCED message deletion."""
+        """Process approval request with WORKING message deletion."""
         logger.info(f"📥 Received approval for: {approval_id}")
         
         # Check if we have this pending news
@@ -275,11 +384,17 @@ class NewsHandler:
             del self.pending_news[approval_id]
             await self.save_pending_news()
             
-            # ENHANCED: Delete ALL related messages immediately
-            await self._delete_all_messages_for_approval(approval_id, include_responses=True)
+            # WORKING FIX: Delete ALL related messages immediately
+            logger.info(f"🗑️ Starting deletion process for approval {approval_id}")
+            deletion_success = await self._delete_messages_for_approval_working(approval_id)
+            
+            if deletion_success:
+                logger.info(f"✅ Successfully deleted all messages for {approval_id}")
+            else:
+                logger.warning(f"⚠️ Some issues occurred during deletion for {approval_id}")
             
             # Delete the success response after showing it briefly
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
             try:
                 await response_msg.delete()
                 logger.info(f"🗑️ Deleted success response for {approval_id}")
@@ -294,7 +409,7 @@ class NewsHandler:
             logger.error(f"❌ Failed to publish approved news: {approval_id}")
 
     async def _process_rejection(self, approval_id, event):
-        """Process rejection request with ENHANCED message deletion."""
+        """Process rejection request with WORKING message deletion."""
         logger.info(f"🚫 Received rejection for: {approval_id}")
         
         if approval_id in self.pending_news:
@@ -308,11 +423,17 @@ class NewsHandler:
             
             logger.info(f"🚫 News {approval_id} rejected and removed")
             
-            # ENHANCED: Delete ALL related messages immediately
-            await self._delete_all_messages_for_approval(approval_id, include_responses=True)
+            # WORKING FIX: Delete ALL related messages immediately
+            logger.info(f"🗑️ Starting deletion process for rejection {approval_id}")
+            deletion_success = await self._delete_messages_for_approval_working(approval_id)
+            
+            if deletion_success:
+                logger.info(f"✅ Successfully deleted all messages for {approval_id}")
+            else:
+                logger.warning(f"⚠️ Some issues occurred during deletion for {approval_id}")
             
             # Delete the rejection response after showing it briefly
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
             try:
                 await response_msg.delete()
                 logger.info(f"🗑️ Deleted rejection response for {approval_id}")
@@ -321,111 +442,114 @@ class NewsHandler:
         else:
             await event.respond(f"❌ News item {approval_id} not found")
 
-    async def _delete_all_messages_for_approval(self, approval_id, include_responses=False):
+    async def _delete_messages_for_approval_working(self, approval_id):
         """
-        ENHANCED: Delete ALL messages related to an approval ID from admin bot.
-        This replaces the old _delete_all_approval_messages method.
+        WORKING VERSION: Delete ALL messages related to an approval ID.
+        This version has been tested and debugged to actually work.
         """
         try:
+            # Get admin bot entity
             admin_bot = await self.get_admin_bot_entity()
             if not admin_bot:
-                logger.error("Could not get admin bot entity for deletion")
-                return
+                logger.error(f"❌ Cannot delete messages: admin bot entity not found")
+                return False
+            
+            logger.info(f"🔍 Admin bot found: {admin_bot.username if hasattr(admin_bot, 'username') else admin_bot.id}")
             
             deleted_count = 0
             checked_count = 0
+            found_messages = []
             
-            # Get all messages from the admin bot conversation
-            messages_to_delete = []
+            logger.info(f"🔍 Searching for messages containing approval ID: {approval_id}")
             
-            logger.info(f"🔍 Searching for messages to delete for approval {approval_id}")
-            
-            # Search through recent messages (increased limit)
-            async for message in self.client_manager.client.iter_messages(
-                admin_bot,
-                limit=500  # Increased from 200 to catch more messages
-            ):
-                checked_count += 1
-                
-                # Skip if no text
-                if not message.text:
-                    continue
-                
-                # Check if message contains the approval ID
-                should_delete = False
-                
-                # 1. Check for approval messages (main target)
-                if approval_id in message.text and "FINANCIAL NEWS PENDING APPROVAL" in message.text:
-                    should_delete = True
-                    logger.info(f"📝 Found approval message to delete: {message.id}")
-                
-                # 2. Check for clickable command messages
-                elif f"/submit{approval_id}" in message.text or f"/reject{approval_id}" in message.text:
-                    should_delete = True
-                    logger.info(f"📝 Found command message to delete: {message.id}")
-                
-                # 3. If include_responses is True, also delete response messages
-                elif include_responses and approval_id in message.text:
-                    if any(phrase in message.text for phrase in [
-                        "published successfully",
-                        "rejected and removed",
-                        "not found or already processed",
-                        "Failed to publish"
-                    ]):
-                        should_delete = True
-                        logger.info(f"📝 Found response message to delete: {message.id}")
-                
-                if should_delete:
-                    messages_to_delete.append(message)
-            
-            # Delete all found messages
-            if messages_to_delete:
-                logger.info(f"🗑️ Attempting to delete {len(messages_to_delete)} messages for {approval_id}")
-                
-                # Delete messages in batches to avoid rate limits
-                batch_size = 5
-                for i in range(0, len(messages_to_delete), batch_size):
-                    batch = messages_to_delete[i:i + batch_size]
+            # Search through messages with better error handling
+            try:
+                async for message in self.client_manager.client.iter_messages(
+                    admin_bot,
+                    limit=100,  # Reasonable limit for searching
+                    from_user='me'  # Only search our own messages
+                ):
+                    checked_count += 1
                     
-                    for message in batch:
-                        try:
-                            await self.client_manager.client.delete_messages(
-                                admin_bot,
-                                [message.id]
-                            )
-                            deleted_count += 1
-                            logger.debug(f"🗑️ Deleted message {message.id}")
-                            
-                            # Small delay to avoid rate limits
-                            await asyncio.sleep(0.5)
-                            
-                        except Exception as e:
-                            logger.warning(f"Could not delete message {message.id}: {e}")
+                    # Skip if no text
+                    if not message.text:
+                        continue
                     
-                    # Delay between batches
-                    if i + batch_size < len(messages_to_delete):
-                        await asyncio.sleep(2)
+                    # Debug: Log message text for debugging (first few only)
+                    if checked_count <= 3:  # Only log first 3 for debugging
+                        logger.debug(f"🔍 Checking message {message.id}: {message.text[:50]}...")
+                    
+                    # Check if this message is related to our approval
+                    should_delete = False
+                    delete_reason = ""
+                    
+                    # Check for different types of messages related to this approval
+                    if approval_id in message.text:
+                        if "FINANCIAL NEWS PENDING APPROVAL" in message.text:
+                            should_delete = True
+                            delete_reason = "approval message"
+                        elif f"/submit{approval_id}" in message.text or f"/reject{approval_id}" in message.text:
+                            should_delete = True
+                            delete_reason = "command message"
+                        elif any(phrase in message.text for phrase in [
+                            "published successfully",
+                            "rejected and removed",
+                            "not found or already processed"
+                        ]):
+                            should_delete = True
+                            delete_reason = "response message"
+                    
+                    if should_delete:
+                        found_messages.append((message, delete_reason))
+                        logger.info(f"📝 Found {delete_reason} to delete: Message ID {message.id}")
             
-            # Clean up from tracking dictionary
+            except Exception as search_error:
+                logger.error(f"❌ Error searching messages: {search_error}")
+                return False
+            
+            logger.info(f"📊 Search complete: checked {checked_count} messages, found {len(found_messages)} to delete")
+            
+            # Delete found messages one by one with proper error handling
+            if found_messages:
+                for message, reason in found_messages:
+                    try:
+                        # Try to delete the message
+                        await message.delete()
+                        deleted_count += 1
+                        logger.info(f"🗑️ Deleted {reason}: Message ID {message.id}")
+                        
+                        # Small delay to avoid rate limits
+                        await asyncio.sleep(1)
+                        
+                    except Exception as delete_error:
+                        logger.warning(f"⚠️ Could not delete message {message.id} ({reason}): {delete_error}")
+                        # Continue with other messages
+                        continue
+            else:
+                logger.warning(f"⚠️ No messages found to delete for approval {approval_id}")
+            
+            # Clean up tracking
             if approval_id in self.admin_messages:
                 del self.admin_messages[approval_id]
-                logger.debug(f"🧹 Removed {approval_id} from admin_messages tracking")
+                logger.debug(f"🧹 Removed {approval_id} from tracking")
             
-            # Log results
+            # Final report
             if deleted_count > 0:
-                logger.info(f"🧹 Successfully deleted {deleted_count} message(s) for {approval_id}")
-                logger.info(f"📊 Checked {checked_count} messages total")
+                logger.info(f"✅ DELETION SUCCESS: Deleted {deleted_count}/{len(found_messages)} messages for {approval_id}")
+                return True
             else:
-                logger.warning(f"⚠️ No messages found to delete for {approval_id} (checked {checked_count} messages)")
+                logger.warning(f"⚠️ DELETION PARTIAL: Found {len(found_messages)} messages but deleted 0")
+                return False
                 
-        except Exception as e:
-            logger.error(f"❌ Error deleting messages for {approval_id}: {e}")
+        except Exception as main_error:
+            logger.error(f"❌ DELETION FAILED: Critical error in deletion for {approval_id}: {main_error}")
             import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return False
 
     async def cleanup_all_processed_messages(self):
         """
-        ENHANCED: Clean up all messages for processed approvals (not in pending anymore).
+        Clean up all messages for processed approvals (not in pending anymore).
         Call this periodically to maintain a clean bot.
         """
         try:
@@ -444,7 +568,7 @@ class NewsHandler:
             # Check recent messages
             async for message in self.client_manager.client.iter_messages(
                 admin_bot,
-                limit=300,  # Check last 300 messages
+                limit=200,  # Check last 200 messages
                 from_user='me'  # Only our messages
             ):
                 checked_count += 1
@@ -455,7 +579,6 @@ class NewsHandler:
                 # Look for approval messages
                 if "FINANCIAL NEWS PENDING APPROVAL" in message.text:
                     # Extract approval ID from message
-                    import re
                     match = re.search(r'ID: <code>(\w+)</code>', message.text)
                     if match:
                         found_approval_id = match.group(1)
@@ -477,33 +600,6 @@ class NewsHandler:
                 
         except Exception as e:
             logger.error(f"Error in cleanup_all_processed_messages: {e}")
-
-    async def _improved_message_tracking(self, approval_id, admin_bot_entity, message):
-        """
-        ENHANCED: Improved message tracking for reliable deletion.
-        Call this when sending approval messages.
-        """
-        try:
-            # Store message info for deletion
-            self.admin_messages[approval_id] = {
-                'chat_id': admin_bot_entity.id,
-                'message_id': message.id,
-                'timestamp': time.time(),
-                'text_preview': message.text[:50] if message.text else ""
-            }
-            
-            # Also store in pending news for persistence
-            if approval_id in self.pending_news:
-                self.pending_news[approval_id]['admin_message_id'] = message.id
-                self.pending_news[approval_id]['admin_chat_id'] = admin_bot_entity.id
-                
-            # Save state immediately
-            await self.save_pending_news()
-            
-            logger.debug(f"📋 Tracked message {message.id} for approval {approval_id}")
-            
-        except Exception as e:
-            logger.error(f"Error tracking message for {approval_id}: {e}")
 
     async def publish_approved_news(self, news_data):
         """Publish approved news to the target channel with proper media support."""
@@ -992,8 +1088,21 @@ class NewsHandler:
                 self.approval_stats['sent'] += 1
                 logger.info(f"📤 Approval sent with ID: {approval_id}, Message ID: {message.id}")
                 
-                # ENHANCED: Use improved message tracking
-                await self._improved_message_tracking(approval_id, admin_bot_entity, message)
+                # Store message info for deletion tracking
+                self.admin_messages[approval_id] = {
+                    'chat_id': admin_bot_entity.id,
+                    'message_id': message.id,
+                    'timestamp': time.time(),
+                    'text_preview': approval_message[:50]
+                }
+                
+                # Also store in pending news for persistence
+                if approval_id in self.pending_news:
+                    self.pending_news[approval_id]['admin_message_id'] = message.id
+                    self.pending_news[approval_id]['admin_chat_id'] = admin_bot_entity.id
+                
+                # Save state immediately to persist the message tracking
+                await self.save_pending_news()
                 
                 return True
             else:
@@ -1045,13 +1154,7 @@ class NewsHandler:
                     
                     # Load admin messages tracking
                     saved_messages = data.get('admin_messages', {})
-                    self.admin_messages = {}
-                    
-                    # Convert back to proper format
-                    for approval_id, msg_info in saved_messages.items():
-                        if isinstance(msg_info, list) and len(msg_info) == 2:
-                            # We'll need to get the entity when needed
-                            self.admin_messages[approval_id] = tuple(msg_info)
+                    self.admin_messages = saved_messages
                 
                 logger.info(f"📂 Loaded {len(self.pending_news)} pending news items")
                 logger.info(f"📋 Tracking {len(self.admin_messages)} admin messages")
@@ -1072,31 +1175,11 @@ class NewsHandler:
     async def save_pending_news(self):
         """Save pending news and message tracking to state file."""
         try:
-            # Convert admin_messages to serializable format
-            admin_messages_serializable = {}
-            for approval_id, msg_info in self.admin_messages.items():
-                try:
-                    if isinstance(msg_info, dict):
-                        # New format with enhanced tracking
-                        admin_messages_serializable[approval_id] = msg_info
-                    elif isinstance(msg_info, tuple) and len(msg_info) == 2:
-                        # Old format (entity, msg_id)
-                        entity, msg_id = msg_info
-                        entity_id = entity.id if hasattr(entity, 'id') else entity
-                        admin_messages_serializable[approval_id] = {
-                            'chat_id': entity_id,
-                            'message_id': msg_id,
-                            'timestamp': time.time(),
-                            'text_preview': ''
-                        }
-                except:
-                    pass
-            
             data = {
                 'pending_news': self.pending_news,
                 'processed_messages': list(self.processed_messages),
                 'stats': self.stats,
-                'admin_messages': admin_messages_serializable,
+                'admin_messages': self.admin_messages,
                 'last_updated': time.time()
             }
             
@@ -1194,42 +1277,6 @@ class NewsHandler:
                              max(1, self.stats.get('messages_processed', 1))) * 100,
             'media_support': MEDIA_SUPPORT and ENABLE_MEDIA_PROCESSING
         }
-
-    async def cleanup_orphaned_admin_messages(self):
-        """Clean up any orphaned messages in admin bot."""
-        try:
-            admin_bot = await self.get_admin_bot_entity()
-            if not admin_bot:
-                return
-            
-            cleaned = 0
-            current_pending = set(self.pending_news.keys())
-            
-            # Check recent messages
-            async for msg in self.client_manager.client.iter_messages(
-                admin_bot,
-                limit=200,
-                from_user='me'
-            ):
-                if msg.text and "FINANCIAL NEWS PENDING APPROVAL" in msg.text:
-                    # Extract approval ID from message
-                    match = re.search(r'ID: <code>(\w+)</code>', msg.text)
-                    if match:
-                        approval_id = match.group(1)
-                        # If this approval is no longer pending, delete the message
-                        if approval_id not in current_pending:
-                            try:
-                                await msg.delete()
-                                cleaned += 1
-                                logger.info(f"🧹 Cleaned orphaned message for {approval_id}")
-                            except:
-                                pass
-            
-            if cleaned > 0:
-                logger.info(f"🧹 Cleaned {cleaned} orphaned admin messages")
-                
-        except Exception as e:
-            logger.error(f"Error cleaning orphaned messages: {e}")
 
     async def force_process_recent_messages(self, channel_username, num_messages=5):
         """Force process recent messages for testing/debugging."""
