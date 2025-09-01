@@ -1,0 +1,71 @@
+# FREE AI Dependencies for News Approval System
+# Install with: pip install -r requirements-ai.txt
+
+# Core AI Libraries (FREE)
+torch>=2.0.0,<2.2.0
+transformers>=4.30.0
+sentence-transformers>=2.2.0
+scikit-learn>=1.3.0
+numpy>=1.24.0
+
+# NLP Processing
+spacy>=3.6.0
+# Run after install: python -m spacy download en_core_web_sm
+
+# Persian Text Processing (Optional but recommended)
+hazm>=0.7.0
+
+# Data Processing
+pandas>=2.0.0
+scipy>=1.10.0
+
+# Caching and Optimization
+joblib>=1.3.0
+pickle5>=0.0.12  # For better pickle compatibility
+
+# Progress and Logging
+tqdm>=4.65.0
+
+# Original requirements (keep existing)
+aiohappyeyeballs==2.6.1
+aiohttp==3.12.15
+aiosignal==1.4.0
+attrs==25.3.0
+black==25.1.0
+certifi==2025.8.3
+charset-normalizer==3.4.2
+click==8.2.1
+colorama==0.4.6
+flake8==7.3.0
+frozenlist==1.7.0
+idna==3.10
+iniconfig==2.1.0
+mccabe==0.7.0
+multidict==6.6.3
+mypy_extensions==1.1.0
+packaging==25.0
+pathspec==0.12.1
+platformdirs==4.3.8
+pluggy==1.6.0
+propcache==0.3.2
+pyaes==1.6.1
+pyasn1==0.6.1
+pycodestyle==2.14.0
+pyflakes==3.4.0
+Pygments==2.19.2
+pytest==8.4.1
+pytest-asyncio==1.1.0
+python-dotenv==1.1.1
+pytz==2025.2
+requests==2.32.4
+rsa==4.9.1
+Telethon==1.40.0
+urllib3==2.5.0
+yarl==1.20.1
+
+# Optional: CPU-only torch for lower resource usage
+# Uncomment if you have memory issues:
+# --index-url https://download.pytorch.org/whl/cpu
+# torch
+# torchaudio 
+# torchvision
